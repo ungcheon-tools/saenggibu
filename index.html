@@ -152,6 +152,12 @@ button.chk-chip:disabled{cursor:default;opacity:.6}
 button.chk-chip.fixing{opacity:1;border-style:dashed;border-color:currentColor}
 .checks .fix-hint{color:var(--muted);font-weight:500;margin-left:2px}
 .checks .undo{padding:1px 8px;font-size:inherit;font-weight:600;border-radius:99px}
+.spell{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:.76rem}
+.spell .lbl{color:var(--muted);font-weight:600;margin-right:2px}
+.spell.fixed .lbl{color:var(--accent)}
+.sp-chip{padding:1px 8px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-weight:600;cursor:help}
+.sp-chip s{opacity:.65;font-weight:500}
+.spell .undo{padding:1px 8px;font-size:inherit;font-weight:600;border-radius:99px}
 .err{font-size:.82rem;background:var(--bad-soft);color:var(--bad);padding:6px 10px;border-radius:8px}
 .result.empty{background:var(--surface2)}
 .empty-state{text-align:center;color:var(--muted);padding:28px 10px;border:1px dashed var(--line);border-radius:var(--radius)}
@@ -309,6 +315,13 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
       <label class="hint" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="rememberKey"> 이 컴퓨터에 키 기억하기 (공용 PC에서는 끄세요)</label>
       <span class="status" id="keyStatus"></span>
     </div>
+    <div class="row" style="margin-top:10px;align-items:flex-end">
+      <label class="f" style="flex:1 1 260px">맞춤법 검사기 키 (바른 · 선택)
+        <input type="password" id="bareunKey" placeholder="bareun.ai 에서 받은 API 키 (비우면 AI로 맞춤법 확인)" autocomplete="off">
+      </label>
+      <a class="keylink" href="https://bareun.ai/" target="_blank" rel="noopener" style="margin-bottom:9px">bareun.ai 에서 무료 키 받기 ↗</a>
+    </div>
+    <p class="hint" style="margin:4px 0 0">넣으면 생성 마지막에 맞춤법·띄어쓰기를 바른 맞춤법 검사기로 확인해요(월 5만 어절 무료). 한도를 넘거나 연결이 안 되면 저절로 AI로 확인해요. 보내는 것은 만든 생기부 글뿐이고 학생 이름·소감문은 보내지 않아요.</p>
     <details style="margin-top:8px" id="keyGuideBox">
       <summary style="cursor:pointer;font-weight:700">API 키 받는 방법 · 다른 AI 쓰기</summary>
       <div class="guide" id="keyGuide">
@@ -889,6 +902,114 @@ function lengthAsk(ctx, draft){
     + lenFix(draft, ctx)
     + "\n\n[학생 소감문]\n\"\"\"\n" + ctx.essay + "\n\"\"\"\n\n[초안]\n\"\"\"\n" + draft + "\n\"\"\"\n\n" + checklist(ctx);
 }
+// ---------- 맞춤법·띄어쓰기만 고치기(생성 마지막 단계) ----------
+const SPELL_SYS = "너는 학교생활기록부 문장의 맞춤법·띄어쓰기·문장 부호만 바로잡는 한국어 교정자다. 낱말 선택, 내용, 문장 구조, 종결어미, 문단은 절대 바꾸지 않는다.";
+function spellAsk(text){
+  return "[맞춤법·띄어쓰기 교정 요청]\n아래 [글]에서 한국어 맞춤법·띄어쓰기·문장 부호가 틀린 곳만 고쳐 전체를 다시 쓰세요. 낱말을 다른 말로 바꾸거나, 문장을 더하거나 빼거나, 순서·종결어미·줄바꿈(문단)을 바꾸지 마세요. 고칠 곳이 없으면 그대로 쓰세요. 설명·제목·따옴표 없이 글만 출력하세요.\n\n[글]\n\"\"\"\n" + text + "\n\"\"\"";
+}
+// 글자 단위 LCS: 두 글의 바뀐 구간 [{a0,a1,b0,b1}] 과 같은 글자 수
+function diffRegions(a, b){
+  const A=[...a], B=[...b], n=A.length, m=B.length, W=m+1, L=new Uint16Array((n+1)*(m+1));
+  for (let i=n-1;i>=0;i--) for (let j=m-1;j>=0;j--) L[i*W+j] = A[i]===B[j] ? L[(i+1)*W+j+1]+1 : Math.max(L[(i+1)*W+j], L[i*W+j+1]);
+  const regs=[]; let i=0, j=0, cur=null;
+  while (i<n || j<m){
+    if (i<n && j<m && A[i]===B[j]){ if (cur){ regs.push(cur); cur=null; } i++; j++; continue; }
+    if (!cur) cur={a0:i, a1:i, b0:j, b1:j};
+    if (j<m && (i===n || L[i*W+j+1] >= L[(i+1)*W+j])){ j++; cur.b1=j; } else { i++; cur.a1=i; }
+  }
+  if (cur) regs.push(cur);
+  return {regs, A, B, lcs:L[0]};
+}
+// 고친 곳을 낱말 단위로: [{from, to}]
+function spellChanges(a, b){
+  const {regs, A, B} = diffRegions(a, b), sp = c => /\s/.test(c), out=[];
+  for (const r of regs){
+    let {a0,a1,b0,b1} = r;
+    while (a0>0 && !sp(A[a0-1])) a0--; while (a1<A.length && !sp(A[a1])) a1++;
+    while (b0>0 && !sp(B[b0-1])) b0--; while (b1<B.length && !sp(B[b1])) b1++;
+    const p = out[out.length-1];   // 띄어쓰기 한 칸을 사이에 둔 고침(반복 할수 → 반복할 수)은 한 묶음으로
+    if (p && a0<=p.a1+1 && b0<=p.b1+1){ p.a1=Math.max(p.a1,a1); p.b1=Math.max(p.b1,b1); } else out.push({a0,a1,b0,b1});
+  }
+  return out.map(s=>({from:A.slice(s.a0,s.a1).join("").trim(), to:B.slice(s.b0,s.b1).join("").trim()})).filter(x=>x.from!==x.to);
+}
+// 한글 낱자(자모)로 풀기: 맞춤법 고침(몇일→며칠, 되요→돼요)은 자모가 거의 같고, 다른 낱말(분석→검토)은 거의 다 다름
+function jamo(s){
+  let o=""; for (const ch of s){ const c=ch.codePointAt(0)-0xAC00;
+    if (c>=0 && c<11172){ const t=c%28; o += String.fromCharCode(0x1100+Math.floor(c/588), 0x1161+Math.floor((c%588)/28)) + (t?String.fromCharCode(0x11A7+t):""); } else o += ch; }
+  return o;
+}
+function editDist(a, b){
+  const A=[...a], B=[...b]; let prev=Array.from({length:B.length+1},(_,j)=>j);
+  for (let i=1;i<=A.length;i++){ const cur=[i]; for (let j=1;j<=B.length;j++) cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(A[i-1]===B[j-1]?0:1)); prev=cur; }
+  return prev[B.length];
+}
+// 내용이 바뀌었으면 버림(띄어쓰기를 뺀 글자로 견줌): 바뀐 글자가 3%(최소 8자)를 넘거나, 한 군데에서 4자 이상 바뀌거나,
+// 글자를 바꾼 곳의 자모가 절반 넘게 다르거나(다른 낱말), 두 자 이상을 통째로 더하거나 빼거나,
+// 문단 수가 달라지거나, 나이스 상한을 넘거나, 자동 점검(꼭 고칠 것)이 늘면 버린다
+function spellPassable(text, cand, ctx){
+  const sa = text.replace(/\s/g,""), sb = cand.replace(/\s/g,"");
+  const d = diffRegions(sa, sb), changed = (d.A.length-d.lcs)+(d.B.length-d.lcs);
+  const biggest = d.regs.reduce((mx,r)=>Math.max(mx, r.a1-r.a0, r.b1-r.b0), 0);
+  const musts = t => assess(t, ctx).issues.filter(i=>i.level==="must" && !i.len).length;
+  if (changed > Math.max(8, Math.round(d.A.length*0.03))) return "바뀐 글자가 너무 많음";
+  if (biggest > 3) return "낱말이 바뀐 곳이 있음";
+  for (const r of d.regs){
+    const x = d.A.slice(r.a0,r.a1).join(""), y = d.B.slice(r.b0,r.b1).join("");
+    if (!x || !y){ if ((x||y).replace(/[^가-힣A-Za-z0-9]/g,"").length >= 2) return "말을 더하거나 뺀 곳이 있음"; continue; }
+    const jx = jamo(x), jy = jamo(y);
+    if (editDist(jx, jy) > Math.max(1, Math.max([...jx].length, [...jy].length) * 0.5)) return "낱말이 바뀐 곳이 있음";
+  }
+  if (text.split("\n").length !== cand.split("\n").length) return "문단이 바뀜";
+  if (neisBytes(cand) > ctx.cap) return "분량이 넘침";
+  if (musts(cand) > musts(text)) return "점검에 걸리는 곳이 늘어남";
+  return "";
+}
+// 바른 맞춤법 검사기(bareun.ai, Connect RPC JSON): 키가 있으면 먼저 씀. 월 무료 한도를 넘기거나 안 되면 AI 로
+const BAREUN_URL = "https://api.bareun.ai/bareun.RevisionService/CorrectError";
+const BAREUN_APP_ID = "";   // 바른 이용약관 11조: 남이 자기 키를 넣어 쓰는 연동 앱은 등록한 앱 아이디를 X-Bareun-App-Id 로 보냄 — 등록하면 여기에
+const BAREUN_STORE = "saenggibu.webapp.bareun";
+function bareunKey(){ const e=$("#bareunKey"); return mode==="key" && e ? e.value.replace(/\s/g,"") : ""; }
+async function bareunCorrect(text, key, signal){
+  const headers = {"Content-Type":"application/json", "api-key":key};
+  if (BAREUN_APP_ID) headers["X-Bareun-App-Id"] = BAREUN_APP_ID;
+  let r, j=null;
+  try{ r = await fetch(BAREUN_URL, {method:"POST", headers, signal, body: JSON.stringify({document:{content:text, language:"ko_KR"}, encodingType:"UTF32"})}); }
+  catch(e){ if (signal && signal.aborted) throw {code:"cancelled"}; throw {bareun:"바른 연결 안 됨"}; }
+  try{ j = await r.json(); }catch(e){}
+  if (r.ok && j && typeof j.revised==="string") return j.revised;
+  const code = (j && j.code) || "", msg = (j && j.message) || "";
+  if (r.status===429 || code==="resource_exhausted" || /한도|초과|사용량|quota|exhaust/i.test(msg)) throw {bareun:"바른 한도 초과"};
+  if (r.status===401 || r.status===403 || code==="permission_denied" || code==="unauthenticated") throw {bareun:"바른 키 확인 필요"};
+  throw {bareun:"바른 오류("+(code||r.status)+")"};
+}
+// 교정 글을 견줘 받아들일지: 내용이 바뀌면 버리고, 고친 곳 목록을 만듦
+function spellJudge(text, cand, ctx, via){
+  cand = cleanup(cand||"");
+  if (!cand.trim() || cand===text) return {text, spell:{list:[], via}};
+  const why = spellPassable(text, cand, ctx);
+  if (why) return {text, spell:{list:[], rejected:why, via}};
+  const list = spellChanges(text, cand);
+  return list.length ? {text:cand, spell:{list, via}, orig:text} : {text, spell:{list:[], via}};
+}
+async function spellPass(text, ctx, signal, onRetry){
+  const stopped = e => e && (e.code==="cancelled" || e.kind==="stop");
+  let fallback = "";
+  const bk = bareunKey();
+  if (bk){
+    try{ return spellJudge(text, await bareunCorrect(text, bk, signal), ctx, "바른"); }
+    catch(e){ if (stopped(e)) return {text, spell:{list:[], skipped:"중지"}}; fallback = (e && e.bareun) || "바른 오류"; }
+  }
+  try{
+    if (mode==="key") await sleep(4000, signal);
+    const r = spellJudge(text, await callAI(SPELL_SYS, spellAsk(text), signal, onRetry), ctx, "AI");
+    if (fallback) r.spell.fallback = fallback;
+    return r;
+  }catch(e){
+    // 교정 단계에서 멈추거나 실패해도 만든 글은 그대로 둠
+    return {text, spell:{list:[], fallback, skipped: stopped(e) ? "중지" : (e && e.kind==="limit") ? "AI 사용 한도" : "오류"}};
+  }
+}
+
 async function generateFor(subj, stu, signal, onRetry){
   const ctx = genContext(subj, stu);
   const ask = async user => normalizeParagraphs(cleanup(await callAI(ctx.system, user, signal, onRetry)), ctx.paras);
@@ -921,7 +1042,11 @@ async function generateFor(subj, stu, signal, onRetry){
     if (sc < bestScore){ best=cand; bestSt=st; bestScore=sc; }
   }
   // 마지막에도 넘치면 문장 끝에서 자르고 문단 수를 다시 맞춤 (줄바꿈이 1바이트 더 들어서 여유 2바이트)
-  return trimmed(best);
+  best = trimmed(best);
+  // 3) 맞춤법·띄어쓰기만 고치기(내용이 바뀌면 버리고, 고친 곳은 카드에 표시)
+  const sp = await spellPass(best, ctx, signal, onRetry);
+  stu.spell = sp.spell; stu.spellOrig = sp.orig || null;
+  return sp.text;
 }
 
 // ---------- 화면 ----------
@@ -1169,7 +1294,7 @@ function studentCard(s, stu, i){
     ...["","상","중","하"].map(t=>el("button",{class:(stu.level||"")===t?"on":"", "data-v":t, onclick:()=>{ stu.level=t; save(); lvSeg.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===t)); }}, t || ("기본"+(s.level?"("+s.level+")":"")))));
   const essay = el("textarea",{rows:"6",placeholder:"학생 소감문 (친구 이름·연락처는 빼고)",oninput:e=>{stu.essay=e.target.value; save(); updateGenCount(); const m=card.querySelector(".essay-meter"); if(m) m.textContent=stu.essay? neisBytes(stu.essay).toLocaleString()+"B":""; if (stu.result) refreshMeter(card,s,stu);}});
   essay.value=stu.essay;
-  const res = el("textarea",{rows:"6",class:"result"+(stu.result?"":" empty"),placeholder: working.has(stu.id)?"작성 중…":"생성 결과가 여기에 나와요. 직접 고쳐도 됩니다.",oninput:e=>{stu.result=e.target.value; stu.prevResult=null; e.target.classList.toggle("empty",!stu.result); save(); refreshMeter(card,s,stu); updateGenCount(); const cb=card.querySelector(".copy-btn"); if(cb) cb.disabled=!stu.result;}});
+  const res = el("textarea",{rows:"6",class:"result"+(stu.result?"":" empty"),placeholder: working.has(stu.id)?"작성 중…":"생성 결과가 여기에 나와요. 직접 고쳐도 됩니다.",oninput:e=>{stu.result=e.target.value; stu.prevResult=null; stu.spell=null; stu.spellOrig=null; e.target.classList.toggle("empty",!stu.result); save(); refreshMeter(card,s,stu); updateGenCount(); const cb=card.querySelector(".copy-btn"); if(cb) cb.disabled=!stu.result;}});
   res.value=stu.result;
   const meter = el("span",{class:"meter"});
   const regen = el("button",{class:"sm",disabled: mode==="none" || !!running || working.has(stu.id) || !stu.essay.trim(), onclick:()=>generateOne(s,stu)}, stu.result? "다시 생성":"생성");
@@ -1197,7 +1322,8 @@ function studentCard(s, stu, i){
     el("div",{class:"stu-body"},
       el("div",{class:"col"}, el("div",{class:"col-label"},el("span",{text:"소감문"}), el("span",{class:"meter essay-meter",text:stu.essay? neisBytes(stu.essay).toLocaleString()+"B":""})), essay),
       el("div",{class:"col"}, el("div",{class:"col-label"},el("span",{text:"생기부 문장"}), el("span",{class:"meta"}, meter, el("span",{class:"preset-tag",text:"지침: "+((stu.preset&&stu.preset!==s.preset)?stu.preset:tabPreset)}))), res,
-        el("div",{class:"checks",hidden:true}))
+        el("div",{class:"checks",hidden:true}),
+        el("div",{class:"spell",hidden:true}))
     )
   );
   if (stu.error) card.append(el("div",{class:"err",text:stu.error}));
@@ -1215,6 +1341,7 @@ function refreshMeter(card,s,stu){
   }
   const issues = stu.result.trim() ? auditFor(s, stu) : [];
   updateSum(card, stu, issues);
+  renderSpell(card, s, stu);
   const box = card.querySelector(".checks"); if (!box) return;
   if (!stu.result.trim()){ box.hidden=true; box.replaceChildren(); return; }
   box.hidden=false;
@@ -1228,7 +1355,28 @@ function refreshMeter(card,s,stu){
       can ? el("span",{class:"fix-hint",text:"← 누르면 그 부분만 고쳐요"}) : null);
   }
   if (stu.prevResult!=null && !working.has(stu.id))
-    box.append(el("button",{type:"button",class:"sm undo",title:"고치기 전 글로 되돌려요",disabled:!!running,onclick:()=>{ const t=stu.result; stu.result=stu.prevResult; stu.prevResult=null; save(); const r=card.querySelector("textarea.result"); if(r) r.value=stu.result; refreshMeter(card,s,stu); setStatus("고치기 전 글로 되돌렸어요.","good"); void t; }},"되돌리기"));
+    box.append(el("button",{type:"button",class:"sm undo",title:"고치기 전 글로 되돌려요",disabled:!!running,onclick:()=>{ const t=stu.result; stu.result=stu.prevResult; stu.prevResult=null; stu.spell=null; stu.spellOrig=null; save(); const r=card.querySelector("textarea.result"); if(r) r.value=stu.result; refreshMeter(card,s,stu); setStatus("고치기 전 글로 되돌렸어요.","good"); void t; }},"되돌리기"));
+}
+// 생성 마지막 맞춤법·띄어쓰기 교정 결과: 고친 곳(원래 → 고침), 버린 까닭, 못 한 까닭
+function renderSpell(card, s, stu){
+  const box = card.querySelector(".spell"); if (!box) return;
+  const sp = stu.spell;
+  if (!sp || !stu.result.trim() || working.has(stu.id)){ box.hidden=true; box.replaceChildren(); box.className="spell"; return; }
+  box.hidden=false;
+  const list = sp.list||[];
+  // 어디서 확인했는지: 바른 검사기 · AI(바른 한도 초과 등으로 넘어왔으면 그 까닭)
+  const via = sp.via==="바른" ? " · 바른 검사기" : sp.via==="AI" ? (sp.fallback ? " · AI로 확인("+sp.fallback+")" : " · AI") : (sp.fallback ? " · "+sp.fallback : "");
+  box.className = "spell"+(list.length?" fixed":"");
+  if (list.length){
+    box.replaceChildren(...[el("span",{class:"lbl",text:"맞춤법·띄어쓰기 "+list.length+"곳 고침"+via}),
+      ...list.slice(0,12).map(x=>el("span",{class:"sp-chip",title:"원래: "+x.from+"\n고침: "+x.to}, el("s",{text:x.from}), " → "+x.to)),
+      list.length>12 ? el("span",{class:"lbl",text:"외 "+(list.length-12)+"곳"}) : null,
+      stu.spellOrig!=null ? el("button",{type:"button",class:"sm undo",title:"맞춤법 교정 전 글로 되돌려요",disabled:!!running,onclick:()=>{
+        stu.result=stu.spellOrig; stu.spellOrig=null; stu.spell=null; stu.prevResult=null; save();
+        const r=card.querySelector("textarea.result"); if (r) r.value=stu.result; refreshMeter(card,s,stu); setStatus("맞춤법 교정 전 글로 되돌렸어요.","good"); }},"교정 전으로") : null].filter(Boolean));
+  } else {
+    box.replaceChildren(el("span",{class:"lbl",text: (sp.rejected ? "맞춤법 교정: 내용까지 바꿔서 쓰지 않음("+sp.rejected+")" : sp.skipped ? "맞춤법 교정: 못 함("+sp.skipped+")" : "맞춤법·띄어쓰기: 고칠 곳 없음") + via}));
+  }
 }
 // 점검 항목의 종류(숫자·따옴표 안 글자를 뺀 이름): 고친 뒤 그 항목이 없어졌는지 견줄 때
 function issueKey(label){ return String(label||"").replace(/'[^']*'|‘[^’]*’|「[^」]*」|\d+(?:,\d+)*|\([^)]*\)/g,"").replace(/\s+/g," ").trim(); }
@@ -1245,7 +1393,7 @@ async function fixIssue(s, stu, issue){
   // 문단 수만 다르면 AI 없이 바로 잇거나 나눔(탭을 한 문단·두 문단으로 바꾼 뒤 기존 결과에 쓰기 좋게)
   if (/^문단 \d+개/.test(issue.label)){
     const card = document.querySelector('.stu[data-id="'+stu.id+'"]');
-    stu.prevResult = stu.result; stu.result = normalizeParagraphs(stu.result, paraN(s)); save();
+    stu.prevResult = stu.result; stu.result = normalizeParagraphs(stu.result, paraN(s)); stu.spell = null; stu.spellOrig = null; save();
     if (card){ const r=card.querySelector("textarea.result"); if (r) r.value=stu.result; refreshMeter(card, s, stu); }
     setStatus((stu.name||"학생")+" — "+(paraN(s)===1?"한 문단으로 이었어요":"두 문단으로 나눴어요")+". 마음에 안 들면 카드의 ‘되돌리기’를 누르세요.","good");
     return;
@@ -1270,7 +1418,7 @@ async function fixIssue(s, stu, issue){
       const gone = !st.issues.some(i=>issueKey(i.label)===key);
       const newMust = st.issues.some(i=>i.level==="must" && !mustBefore.has(issueKey(i.label)));
       if (gone && !newMust && scoreOf(st, ctx) <= beforeScore){
-        stu.prevResult = draft; stu.result = cand; done = true;
+        stu.prevResult = draft; stu.result = cand; stu.spell = null; stu.spellOrig = null; done = true;
         setStatus("‘"+issue.label+"’을(를) 고쳤어요. 마음에 안 들면 카드의 ‘되돌리기’를 누르세요.","good");
       }
     }
@@ -2828,6 +2976,10 @@ function initKeyBox(){
   sel.onchange=()=>{ modelOverride=""; state.models=state.models||{}; state.models[curProv()]=sel.value; if(curProv()==="gemini") state.model=sel.value; save(); };
   const persist=()=>{ const k=keyStore(curProv()); try{ if($("#rememberKey").checked) localStorage.setItem(k,$("#apiKey").value.trim()); else localStorage.removeItem(k);}catch(e){} };
   $("#apiKey").addEventListener("input",persist); $("#rememberKey").addEventListener("change",persist);
+  // 바른 맞춤법 키: ‘이 컴퓨터에 키 기억하기’를 켰을 때만 이 브라우저에 남김
+  const bk=$("#bareunKey"); bk.value = localStorage_get(BAREUN_STORE) || "";
+  const persistB=()=>{ try{ if($("#rememberKey").checked && bk.value.trim()) localStorage.setItem(BAREUN_STORE, bk.value.trim()); else localStorage.removeItem(BAREUN_STORE); }catch(e){} };
+  bk.addEventListener("input",persistB); $("#rememberKey").addEventListener("change",persistB);
   $("#loadModels").onclick=async()=>{
     const p=curProv(), key=$("#apiKey").value.trim(), st=$("#keyStatus");
     if(!key){ st.textContent="키를 먼저 넣어 주세요."; st.className="status bad"; return; }

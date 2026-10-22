@@ -703,7 +703,7 @@ function lenGoal(text, ctx){
 function lenFix(text, ctx){
   const g = lenGoal(text, ctx), d = Math.abs(g.goal-g.n);
   return g.b < ctx.minB
-    ? "분량이 모자람: 지금 공백 포함 약 "+g.n+"자 → "+g.lo+"~"+g.hi+"자(목표 약 "+g.goal+"자)로, 약 "+d+"자(문장 "+Math.max(1,Math.round(d/60))+"개 정도)를 더 쓸 것. 소감문에 있는데 빠진 방법·자료·과정·맡은 역할을 살리거나, 이미 쓴 장면이 보여주는 역량·태도를 평가하는 문장을 덧붙일 것. 소감문에 없는 사실·장면·숫자는 만들지 말 것."
+    ? "분량이 모자람: 지금 공백 포함 약 "+g.n+"자 → "+g.lo+"~"+g.hi+"자(목표 약 "+g.goal+"자)로, 약 "+d+"자(문장 "+Math.max(1,Math.round(d/60))+"개 정도)를 더 쓸 것. 소감문에 있는데 빠진 방법·자료·과정·맡은 역할을 살리거나, 이미 쓴 장면이 보여주는 역량·태도를 평가하는 문장을 덧붙일 것."+(ctx.thin ? " "+thinFill(ctx.cat) : "")+" 소감문에 없는 사실·장면·숫자는 만들지 말 것."
     : "분량이 넘침: 지금 공백 포함 약 "+g.n+"자 → "+g.lo+"~"+g.hi+"자(목표 약 "+g.goal+"자)로, 약 "+d+"자를 줄일 것. 겹치는 평가 문장과 꾸밈말부터 덜어 내고 활동 사실은 남길 것.";
 }
 // 카드·내보내기·출력에서 쓰는 점검: 탭의 문단 수와 학생의 분량 목표까지
@@ -853,6 +853,12 @@ function maskEssay(essay, stu){
   t = t.replace(/(?<!\d)0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/g,"(연락처)").replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g,"(메일)");
   return t.trim();
 }
+// 소감문이 짧을 때 분량을 채우는 방법(지어내지 않고, 소감문에 나온 활동 안에서) — 엑셀 modGen ThinFill 과 같은 글
+function thinFill(cat){
+  return cat==="세특"
+    ? "소감문이 짧으니 소감문에 나온 활동마다 이 과목에서 다루는 개념·원리와 이어 무엇을 탐구했는지 풀어 쓰고, 그 활동이 보여 주는 역량·태도를 덧붙여 분량을 채우세요."
+    : "소감문이 짧으니 소감문에 나온 활동마다 그 목적과, 활동이 보여 주는 역량·태도·성장을 풀어 써서 분량을 채우세요.";
+}
 function genContext(subj, stu){
   const max = catOf(subj.cat).max;
   const base = Math.min(Number(subj.target)||max, max);
@@ -868,13 +874,12 @@ function genContext(subj, stu){
   const baseText = basePrompt.trim() + "\n\n" + categoryGuide(subj) + "\n\n" + formatRules(paras);
   const variety = varietyNote();
   const level = levelOf(subj, stu), levelText = levelRule(level);
-  // 소감문이 목표의 30%도 안 되면(근거가 적음) 분량을 억지로 채우게 하지 않음 — 지어내기·부풀리기 방지(기재요령 유의사항 5)
+  // 소감문이 짧아도(목표의 30% 미만) 분량은 목표(분량 상·중·하)대로 채운다(사용자 10-23) — 대신 소감문 안에서 채우는 방법을 알려 지어내기를 막음
   const thin = neisBytes(stu.essay||"") < target*0.3;
-  const lengthRule = thin
-    ? "[분량] 공백 포함 약 "+maxC+"자(나이스 "+target+"바이트)를 목표로 하되, 소감문 내용이 적으니 근거 없는 사실·장면을 지어내거나 평가·꾸밈말을 부풀리지 말고 목표보다 짧아도 됩니다."
-    : "[분량 - 반드시 지킬 것] 공백 포함 약 "+maxC+"자(나이스 "+target+"바이트)를 꽉 채워 쓰세요. 최소 "+minC+"자 이상이어야 합니다. 문장 "+sentences+"~"+(sentences+2)+"개가 알맞습니다. "+(subj.cat==="행특" ? "분량이 짧으니 대표 장면 한두 개를 깊이 있게 쓰고, 활동을 나열하지 마세요." : "짧게 끝내지 말고, 각 활동마다 과정과 의미를 충분히 풀어 쓰세요.")+" 분량을 채우려고 새 사실·장면을 만들거나 평가·꾸밈말을 부풀리지 마세요.";
+  const lengthRule = "[분량 - 반드시 지킬 것] 공백 포함 약 "+maxC+"자(나이스 "+target+"바이트)를 꽉 채워 쓰세요. 최소 "+minC+"자 이상이어야 합니다. 문장 "+sentences+"~"+(sentences+2)+"개가 알맞습니다. "+(subj.cat==="행특" ? "분량이 짧으니 대표 장면 한두 개를 깊이 있게 쓰고, 활동을 나열하지 마세요." : "짧게 끝내지 말고, 각 활동마다 과정과 의미를 충분히 풀어 쓰세요.")
+    + (thin ? " "+thinFill(subj.cat) : "") + " 분량을 채우려고 새 사실·장면을 만들거나 평가·꾸밈말을 부풀리지 마세요.";
   const system = baseText + "\n\n" + variety + (levelText ? "\n\n" + levelText : "") + "\n\n" + lengthRule + (paras===1 ? "\n\n" + PARA_ONE : "");
-  return {max, target, minB, cap, minC, maxC, sentences, paras, thin, base: baseText, variety, level, levelText, lengthRule, system, presetKey: usePreset ? "p:"+stu.preset : "tab",
+  return {max, target, minB, cap, minC, maxC, sentences, paras, thin, cat: subj.cat, base: baseText, variety, level, levelText, lengthRule, system, presetKey: usePreset ? "p:"+stu.preset : "tab",
     essay: maskEssay(stu.essay, stu), rawEssay: stu.essay, name: stu.name};
 }
 function checklist(ctx){
@@ -892,13 +897,13 @@ function firstAsk(ctx){
 }
 function assess(text, ctx){
   const bytes = neisBytes(text);
-  const issues = auditDraft(text, {name:ctx.name, essay:ctx.rawEssay, paras:ctx.paras, target:ctx.target, minB:ctx.thin ? 0 : ctx.minB, cap:ctx.cap});
-  return {bytes, issues, short: !ctx.thin && bytes<ctx.minB, long: bytes>ctx.cap};
+  const issues = auditDraft(text, {name:ctx.name, essay:ctx.rawEssay, paras:ctx.paras, target:ctx.target, minB:ctx.minB, cap:ctx.cap});
+  return {bytes, issues, short: bytes<ctx.minB, long: bytes>ctx.cap};
 }
 function scoreOf(st, ctx){
   let sc = st.issues.filter(i=>!i.len).reduce((a,i)=>a+issueWeight(i),0);   // 분량은 아래에서 따로(두 번 세지 않게)
   // 분량 감점은 9점까지: 꼭 고칠 것(10점) 하나보다 늘 작게 — 길이를 맞추려고 기재 금지·부정 표현이 든 글을 고르지 않게
-  sc += Math.min(9, (!ctx.thin && st.bytes<ctx.minB ? (ctx.minB-st.bytes)/ctx.target*100 : 0) + (st.bytes>ctx.cap ? (st.bytes-ctx.cap)/ctx.target*40 : 0));
+  sc += Math.min(9, (st.bytes<ctx.minB ?(ctx.minB-st.bytes)/ctx.target*100 : 0) + (st.bytes>ctx.cap ? (st.bytes-ctx.cap)/ctx.target*40 : 0));
   return sc;
 }
 function needsFix(st){

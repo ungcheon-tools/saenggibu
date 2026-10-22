@@ -146,6 +146,12 @@ table.imp tr.detail td{background:var(--surface2)}
 .checks.ok .lbl{color:var(--good)}
 .chk-chip{padding:1px 8px;border-radius:99px;background:var(--warn-soft);color:var(--warn);font-weight:600;cursor:help}
 .chk-chip.must{background:var(--bad-soft);color:var(--bad)}
+button.chk-chip{border:1px solid transparent;font:inherit;font-weight:600;font-size:inherit;line-height:1.5;cursor:pointer;white-space:normal;text-align:left}
+button.chk-chip:hover:not(:disabled){border-color:currentColor;filter:brightness(.97)}
+button.chk-chip:disabled{cursor:default;opacity:.6}
+button.chk-chip.fixing{opacity:1;border-style:dashed;border-color:currentColor}
+.checks .fix-hint{color:var(--muted);font-weight:500;margin-left:2px}
+.checks .undo{padding:1px 8px;font-size:inherit;font-weight:600;border-radius:99px}
 .err{font-size:.82rem;background:var(--bad-soft);color:var(--bad);padding:6px 10px;border-radius:8px}
 .result.empty{background:var(--surface2)}
 .empty-state{text-align:center;color:var(--muted);padding:28px 10px;border:1px dashed var(--line);border-radius:var(--radius)}
@@ -214,6 +220,28 @@ table.imp tr.detail td{background:var(--surface2)}
 .preset-tag{font-weight:600;color:var(--accent);background:var(--accent-soft);padding:1px 8px;border-radius:99px}
 kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px}
 @media (prefers-reduced-motion: reduce){.progress>i{transition:none}}
+
+/* 출력하기: 단추로 출력할 때만(html.printing) 출력 영역만 보임 — Ctrl+P 는 화면 그대로 */
+#printArea{display:none}
+.chk-line{display:flex;gap:6px;align-items:center;font-weight:500;font-size:.88rem;color:var(--fg)}
+.pr{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.pr-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:4px}
+.pr-top b{font-size:12pt}
+.pr-top span{font-size:8pt;color:#555}
+.pr-tbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.3pt;line-height:1.5}
+.pr-tbl th{background:#2f5d46;color:#fff;font-weight:700;padding:3px 2px;border:1px solid #2f5d46;text-align:center;word-break:keep-all}
+.pr-tbl td{border:1px solid #888;padding:3px 4px;vertical-align:top;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere}
+.pr-tbl td.c{text-align:center}
+.pr-tbl td.over{color:#c81e1e;font-weight:700}
+.pr-tbl thead{display:table-header-group}
+.pr-tbl tr{break-inside:avoid;page-break-inside:avoid}
+.pr-foot{margin-top:5px;font-size:7.5pt;color:#666}
+@media print{
+  html.printing body > *:not(#printArea){display:none !important}
+  html.printing #printArea{display:block !important}
+  html.printing, html.printing body{background:#fff !important;margin:0 !important;padding:0 !important}
+  @page{size:A4 landscape;margin:10mm 9mm}
+}
 </style>
 </head>
 <body>
@@ -311,6 +339,7 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
 </div>
 
 <div class="modal-bg" id="modalBg" hidden><div class="modal" id="modal"></div></div>
+<div id="printArea" aria-hidden="true"></div>
 
 <script>
 "use strict";
@@ -1046,6 +1075,7 @@ function renderPanel(){
       el("button",{onclick:()=>{ s.students.forEach((x,i)=>x._i=i); s.students.sort((a,b)=>sidKey(a)-sidKey(b)||a._i-b._i); s.students.forEach(x=>delete x._i); save(); renderPanel(); setStatus("학번순으로 정렬했어요.","good"); }, disabled:!!running || s.students.length<2},"학번순 정렬"),
       el("button",{onclick:()=>{ s.students.push(newStudent()); save(); renderPanel(); }, disabled:!!running},"+ 학생 추가"),
       el("button",{onclick:()=>exportXlsx(s), disabled:!s.students.length},"엑셀 파일로 내보내기"),
+      el("button",{onclick:()=>openPrint(s), disabled:!s.students.length, title:"엑셀로 내보내는 표를 가로 A4로 바로 출력하거나 PDF로 저장해요"},"출력하기"),
       el("button",{onclick:()=>copyAll(s), disabled:!s.students.length},"엑셀용 전체 복사"),
       foldAll
     ),
@@ -1083,7 +1113,7 @@ function studentCard(s, stu, i){
     ...["","상","중","하"].map(t=>el("button",{class:(stu.level||"")===t?"on":"", "data-v":t, onclick:()=>{ stu.level=t; save(); lvSeg.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===t)); }}, t || ("기본"+(s.level?"("+s.level+")":"")))));
   const essay = el("textarea",{rows:"6",placeholder:"학생 소감문 (친구 이름·연락처는 빼고)",oninput:e=>{stu.essay=e.target.value; save(); updateGenCount(); const m=card.querySelector(".essay-meter"); if(m) m.textContent=stu.essay? neisBytes(stu.essay).toLocaleString()+"B":""; if (stu.result) refreshMeter(card,s,stu);}});
   essay.value=stu.essay;
-  const res = el("textarea",{rows:"6",class:"result"+(stu.result?"":" empty"),placeholder: working.has(stu.id)?"작성 중…":"생성 결과가 여기에 나와요. 직접 고쳐도 됩니다.",oninput:e=>{stu.result=e.target.value; e.target.classList.toggle("empty",!stu.result); save(); refreshMeter(card,s,stu); updateGenCount(); const cb=card.querySelector(".copy-btn"); if(cb) cb.disabled=!stu.result;}});
+  const res = el("textarea",{rows:"6",class:"result"+(stu.result?"":" empty"),placeholder: working.has(stu.id)?"작성 중…":"생성 결과가 여기에 나와요. 직접 고쳐도 됩니다.",oninput:e=>{stu.result=e.target.value; stu.prevResult=null; e.target.classList.toggle("empty",!stu.result); save(); refreshMeter(card,s,stu); updateGenCount(); const cb=card.querySelector(".copy-btn"); if(cb) cb.disabled=!stu.result;}});
   res.value=stu.result;
   const meter = el("span",{class:"meter"});
   const regen = el("button",{class:"sm",disabled: mode==="none" || !!running || working.has(stu.id) || !stu.essay.trim(), onclick:()=>generateOne(s,stu)}, stu.result? "다시 생성":"생성");
@@ -1134,7 +1164,58 @@ function refreshMeter(card,s,stu){
   box.hidden=false;
   box.classList.toggle("ok", !issues.length);
   if (!issues.length) box.replaceChildren(el("span",{class:"lbl",text:"자동 점검: 통과"}));
-  else box.replaceChildren(el("span",{class:"lbl",text:"확인할 것"}), ...issues.map(x=>el("span",{class:"chk-chip"+(x.level==="must"?" must":""), title:x.fix, text:x.label})));
+  else {
+    const can = mode!=="none" && !running;
+    box.replaceChildren(el("span",{class:"lbl",text:"확인할 것"}),
+      ...issues.map(x=>el("button",{type:"button", class:"chk-chip"+(x.level==="must"?" must":"")+(fixingKey===stu.id+"|"+issueKey(x.label)?" fixing":""), disabled:!can,
+        title:x.fix+(can?"\n— 누르면 이 부분만 AI가 고쳐 써요":""), onclick:()=>fixIssue(s, stu, x)}, fixingKey===stu.id+"|"+issueKey(x.label) ? "고치는 중… "+x.label : x.label)),
+      can ? el("span",{class:"fix-hint",text:"← 누르면 그 부분만 고쳐요"}) : null);
+  }
+  if (stu.prevResult!=null && !working.has(stu.id))
+    box.append(el("button",{type:"button",class:"sm undo",title:"고치기 전 글로 되돌려요",disabled:!!running,onclick:()=>{ const t=stu.result; stu.result=stu.prevResult; stu.prevResult=null; save(); const r=card.querySelector("textarea.result"); if(r) r.value=stu.result; refreshMeter(card,s,stu); setStatus("고치기 전 글로 되돌렸어요.","good"); void t; }},"되돌리기"));
+}
+// 점검 항목의 종류(숫자·따옴표 안 글자를 뺀 이름): 고친 뒤 그 항목이 없어졌는지 견줄 때
+function issueKey(label){ return String(label||"").replace(/'[^']*'|‘[^’]*’|「[^」]*」|\d+(?:,\d+)*|\([^)]*\)/g,"").replace(/\s+/g," ").trim(); }
+let fixingKey = "";
+// 칩 하나 = 그 한 가지만 고쳐 쓰기. 그 항목이 없어지고 점수가 나아질 때만 바꾸고, 되돌리기를 남김
+function fixOneAsk(ctx, draft, issue, again){
+  return "[고쳐 쓰기 요청 - 한 가지만]\n아래 [초안]에서 [고칠 점] 한 가지만 고쳐 완성본 전체를 다시 쓰세요. 고칠 점과 관계없는 문장은 글자 하나 바꾸지 말고 그대로 두세요. 분량은 지금과 비슷하게 유지하세요."
+    + (again ? " 앞서 고친 글에서도 같은 문제가 남았으니 이번에는 반드시 해결하세요." : "")
+    + "\n\n[고칠 점]\n" + issue.fix
+    + "\n\n[학생 소감문]\n\"\"\"\n" + ctx.essay + "\n\"\"\"\n\n[초안]\n\"\"\"\n" + draft + "\n\"\"\"\n\n" + checklist(ctx);
+}
+async function fixIssue(s, stu, issue){
+  if (running || mode==="none" || !stu.result.trim()) return;
+  modelOverride = "";
+  const key = issueKey(issue.label);
+  const ctl = new AbortController(); running={ctl}; working.add(stu.id); fixingKey = stu.id+"|"+key; stu.error="";
+  renderPanel(); setStatus((stu.name||"학생")+" — ‘"+issue.label+"’ 고치는 중…");
+  const draft = stu.result;
+  try{
+    const ctx = genContext(s, stu);
+    const before = assess(draft, ctx), beforeScore = scoreOf(before, ctx);
+    const mustBefore = new Set(before.issues.filter(i=>i.level==="must").map(i=>issueKey(i.label)));
+    let done = false;
+    for (let round=0; round<2 && !done; round++){
+      if (round && mode==="key") await sleep(3000, ctl.signal).catch(()=>{ throw new AIError("stop","중지됨"); });
+      let cand = normalizeParagraphs(cleanup(await callAI(ctx.system, fixOneAsk(ctx, draft, issue, round>0), ctl.signal,
+        (a,sec,why)=>setStatus(why+" — "+sec+"초 기다렸다가 다시 시도해요 ("+a+"/3)"))));
+      if (neisBytes(cand)>ctx.cap) cand = normalizeParagraphs(trimToMaxBytes(cand, ctx.cap-2));
+      const st = assess(cand, ctx);
+      const gone = !st.issues.some(i=>issueKey(i.label)===key);
+      const newMust = st.issues.some(i=>i.level==="must" && !mustBefore.has(issueKey(i.label)));
+      if (gone && !newMust && scoreOf(st, ctx) <= beforeScore){
+        stu.prevResult = draft; stu.result = cand; done = true;
+        setStatus("‘"+issue.label+"’을(를) 고쳤어요. 마음에 안 들면 카드의 ‘되돌리기’를 누르세요.","good");
+      }
+    }
+    if (!done) setStatus("‘"+issue.label+"’을(를) 깔끔히 고치지 못해 원래 글을 그대로 두었어요. 다시 누르거나 직접 고쳐 주세요.","bad");
+  }catch(e){
+    setStatus(e.kind==="stop" ? "중지했어요. 원래 글은 그대로예요." : e.message+" (원래 글은 그대로예요)", e.kind==="stop"?"":"bad");
+  }finally{
+    working.delete(stu.id); fixingKey=""; running=null; save();
+    const msg=$("#runStatus")?.textContent, cls=$("#runStatus")?.className; renderPanel(); const r=$("#runStatus"); if(r){ r.textContent=msg; r.className=cls; }
+  }
 }
 function refreshMeters(){ const s=cur(); if(!s) return; document.querySelectorAll(".stu").forEach(c=>{ const st=s.students.find(x=>x.id===c.dataset.id); if(st) refreshMeter(c,s,st); }); }
 function updateGenCount(){
@@ -1153,7 +1234,7 @@ async function generateOne(s, stu){
   const ctl = new AbortController(); running={ctl}; working.add(stu.id); stu.error="";
   renderPanel(); setStatus((stu.name||"학생")+" 작성 중…");
   try{
-    stu.result = await generateFor(s, stu, ctl.signal, (a,sec,why)=>setStatus(why+" — "+sec+"초 기다렸다가 다시 시도해요 ("+a+"/3)"));
+    stu.result = await generateFor(s, stu, ctl.signal, (a,sec,why)=>setStatus(why+" — "+sec+"초 기다렸다가 다시 시도해요 ("+a+"/3)")); stu.prevResult = null;
     setStatus("완료했어요. 내용과 아래 ‘확인할 것’을 살펴보고 고쳐 쓰세요.","good");
   }catch(e){
     keepPartial(stu, e);
@@ -1187,7 +1268,7 @@ async function generateAll(s, onlyChecked){
     setStatus((done+1)+" / "+queue.length+" — "+(stu.name||stu.sid||"학생")+" 작성 중…");
     try{
       stu.result = await generateFor(s, stu, ctl.signal, (a,sec,why)=>setStatus((done+1)+" / "+queue.length+" — "+why+": "+sec+"초 기다렸다가 다시 시도해요 ("+a+"/3)"));
-      ok++;
+      ok++; stu.prevResult = null;
       if (onlyChecked) stu.checked = false;
     }catch(e){
       const kept = keepPartial(stu, e);
@@ -2428,9 +2509,9 @@ function estLines(text, width){
   }
   return lines;
 }
-function buildXlsx(s){
-  const max=catOf(s.cat).max;
-  const cols=[ // [제목, 너비, 스타일(2=줄바꿈 왼쪽, 3=가운데), 값]
+// 엑셀 내보내기·출력하기가 같이 쓰는 칸: [제목, 너비, 스타일(2=줄바꿈 왼쪽, 3=가운데), 값]
+function exportCols(s){
+  return [
     ["학번",10,3,x=>x.sid],
     ["이름",9,3,x=>x.name],
     ["분량",5,3,x=>x.tier||"상"],
@@ -2441,6 +2522,10 @@ function buildXlsx(s){
     ["바이트",9,3,x=>x.result?neisBytes(x.result):""],
     ["자동 점검",30,2,x=>x.result?auditDraft(x.result,{name:x.name,essay:x.essay}).map(i=>i.label).join("\n"):""],
   ];
+}
+function buildXlsx(s){
+  const max=catOf(s.cat).max;
+  const cols=exportCols(s);
   const cell=(r,c,v,st)=> (typeof v==="number")
     ? '<c r="'+colName(c)+r+'" s="'+st+'"><v>'+v+'</v></c>'
     : '<c r="'+colName(c)+r+'" s="'+st+'" t="inlineStr"><is><t xml:space="preserve">'+xmlEsc(v)+'</t></is></c>';
@@ -2499,6 +2584,88 @@ async function exportXlsx(s){
     document.body.append(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},1000);
     setStatus("엑셀 파일을 내려받았어요. 칸을 넓히고 줄 높이는 4줄까지로 맞췄어요(긴 글은 칸을 누르면 위 입력줄에 다 보여요).","good");
   }catch(e){ setStatus("이 화면에서는 파일 저장이 막혀 있어요. ‘엑셀용 전체 복사’를 이용해 주세요.","bad"); }
+}
+// ---------- 출력하기 = 엑셀로 내보낸 표를 바로 인쇄(가로 A4) ----------
+const htmlEsc = v => String(v??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const todayStr = () => { const d=new Date(); return d.getFullYear()+"."+String(d.getMonth()+1).padStart(2,"0")+"."+String(d.getDate()).padStart(2,"0"); };
+function printHTML(s, o){
+  const max = catOf(s.cat).max;
+  const pick = o.who==="checked" ? s.students.filter(x=>x.checked) : o.who==="all" ? s.students : s.students.filter(x=>x.result.trim());
+  const cols = exportCols(s).filter(c=>!(c[0]==="소감문" && !o.essay) && !(c[0]==="자동 점검" && !o.checks));
+  // 종이에서는 좁은 칸(학번·이름·분량·수준·바이트)이 두 줄로 꺾이지 않게 조금 넓힘
+  const PW = {"학번":12,"이름":12,"분량":9,"수준":9,"지침 유형":17,"바이트":11};
+  const wOf = c => PW[c[0]] || c[1];
+  const tot = cols.reduce((a,c)=>a+wOf(c),0);
+  let h = '<div class="pr"><div class="pr-top"><b>'+htmlEsc((s.name||"생기부")+" · "+catOf(s.cat).label+" (최대 "+max.toLocaleString()+"바이트)")+'</b>'
+    + '<span>'+pick.length+'명 · 출력 '+todayStr()+' · AI 초안 — 교사가 확인하고 고쳐서 입력</span></div>'
+    + '<table class="pr-tbl"><colgroup>'+cols.map(c=>'<col style="width:'+(wOf(c)/tot*100).toFixed(2)+'%">').join("")+'</colgroup>'
+    + '<thead><tr>'+cols.map(c=>'<th>'+htmlEsc(c[0])+'</th>').join("")+'</tr></thead><tbody>';
+  for (const x of pick){
+    h += '<tr>'+cols.map(c=>{ const v=c[3](x); const over = c[0]==="바이트" && typeof v==="number" && v>max;
+      return '<td class="'+(c[2]===3?"c":"")+(over?" over":"")+'">'+htmlEsc(typeof v==="number" ? v.toLocaleString() : v)+'</td>'; }).join("")+'</tr>';
+  }
+  h += '</tbody></table><div class="pr-foot">출력물에는 학생 이름·학번이 들어 있어요. 다 쓴 뒤에는 파쇄하는 등 개인정보로 처리하세요.</div></div>';
+  return {html:h, n:pick.length};
+}
+function openPrint(s){
+  const nRes = s.students.filter(x=>x.result.trim()).length, nChk = s.students.filter(x=>x.checked).length;
+  const o = Object.assign({who: nRes ? "result" : "all", essay:true, checks:true}, prefs().print||{});
+  if (o.who==="checked" && !nChk) o.who = nRes ? "result" : "all";
+  if (o.who==="result" && !nRes) o.who = "all";
+  const radio = (v, label, n) => el("label",{class:"chk-line"}, el("input",{type:"radio",name:"prWho",value:v,checked:o.who===v,disabled:!n,onchange:()=>{o.who=v;}}), " "+label+" ("+n+"명)");
+  const box = (k, label) => el("label",{class:"chk-line"}, el("input",{type:"checkbox",checked:!!o[k],onchange:e=>{o[k]=e.target.checked;}}), " "+label);
+  const msg = el("p",{class:"hint",style:"margin:0"});
+  const go = (asFile) => {
+    const {html, n} = printHTML(s, o);
+    if (!n){ msg.textContent="출력할 학생이 없어요. 위에서 다른 학생 범위를 골라 주세요."; msg.className="hint red"; return; }
+    setPref("print", {who:o.who, essay:o.essay, checks:o.checks});
+    closeModal();
+    if (asFile) return savePrintFile(s, html);
+    const area = $("#printArea"); area.innerHTML = html;
+    const done = () => { document.documentElement.classList.remove("printing"); area.innerHTML=""; removeEventListener("afterprint", done); };
+    addEventListener("afterprint", done);
+    document.documentElement.classList.add("printing");
+    try{ window.print(); }catch(e){ done(); setStatus("이 화면에서는 출력 창을 열 수 없어요. ‘인쇄용 파일로 받기’를 써 주세요.","bad"); return; }
+    setTimeout(()=>{ if (document.documentElement.classList.contains("printing") && !matchMedia("print").matches) done(); }, 60000);
+    setStatus(n+"명을 출력 창으로 보냈어요(가로 A4, 엑셀로 내보낸 표와 같은 칸). 프린터 대신 ‘PDF로 저장’을 고르면 파일로 남길 수 있어요.","good");
+  };
+  setModalWide(false);
+  showModal(el("h2",{text:"출력하기 — "+(s.name||"이 탭")}),
+    el("p",{class:"hint",style:"margin:0"},"엑셀로 내보내는 표(학번·이름·분량·수준·지침 유형·소감문·생기부 문장·바이트·자동 점검)를 가로 A4로 바로 출력해요. 칸 안의 글은 잘리지 않고 다 나와요. 출력 창에서 프린터 대신 ‘PDF로 저장’을 고르면 파일로도 남길 수 있어요."),
+    el("div",{class:"f",style:"display:flex;flex-direction:column;gap:4px"}, el("b",{text:"출력할 학생"}),
+      radio("result","생기부 문장이 있는 학생", nRes), radio("checked","체크한 학생만", nChk), radio("all","모든 학생(빈 칸도)", s.students.length)),
+    el("div",{class:"f",style:"display:flex;flex-direction:column;gap:4px"}, el("b",{text:"넣을 칸"}),
+      box("essay","소감문 칸"), box("checks","자동 점검 칸")),
+    el("p",{class:"hint",style:"margin:0"},"출력물에는 학생 이름·학번이 들어가요. 다 쓴 뒤에는 파쇄 등으로 처리해 주세요."),
+    msg,
+    el("div",{class:"row",style:"justify-content:flex-end"},
+      el("button",{onclick:closeModal},"취소"),
+      el("button",{onclick:()=>go(true), title:"출력 창이 안 뜨면(예: Claude 화면 안) 이 파일을 열어 출력하세요"},"인쇄용 파일로 받기"),
+      el("button",{class:"primary",onclick:()=>go(false)},"출력하기")));
+}
+// 출력 창이 막힌 곳(예: Claude 화면 안)에서도 쓰게: 인쇄용 HTML 파일 — 열면 바로 출력 창
+async function savePrintFile(s, body){
+  const css = PRINT_FILE_CSS();
+  const T = n => "<"+n+">";   // 문서 껍데기 태그는 나눠 씀(build.py 가 원본 속 껍데기 태그를 막음)
+  const doc = T("!DOCTYPE html")+T('html lang="ko"')+T("head")+'<meta charset="utf-8"><title>'+htmlEsc((s.name||"생기부")+" 출력")+'</title><style>'+css+'</style>'+T("/head")+T("body")+body
+    + '<scr'+'ipt>addEventListener("load",function(){setTimeout(function(){window.print();},300);});<\/scr'+'ipt>'+T("/body")+T("/html");
+  const fname = "생기부_"+(s.name||"탭").replace(/[\\/:*?"<>|]/g,"_")+"_출력.html";
+  const data = new TextEncoder().encode(doc);
+  if (downloadsApi){
+    try{ await downloadsApi.save({filename:fname, data}); setStatus("인쇄용 파일을 저장했어요. 파일을 열면 출력 창이 떠요.","good"); }
+    catch(e){ if (e.code!=="declined") setStatus("파일 저장을 할 수 없어요.","bad"); }
+    return;
+  }
+  try{
+    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type:"text/html"})); a.download=fname;
+    document.body.append(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},1000);
+    setStatus("인쇄용 파일을 내려받았어요. 파일을 열면 출력 창이 떠요.","good");
+  }catch(e){ setStatus("이 화면에서는 파일 저장이 막혀 있어요.","bad"); }
+}
+// 화면 CSS 중 출력용 규칙만 파일에 넣음(.pr…)
+function PRINT_FILE_CSS(){
+  return "body{margin:0;padding:10mm}@page{size:A4 landscape;margin:10mm 9mm}@media print{body{padding:0}}"
+    + [...document.styleSheets].flatMap(sh=>{ try{ return [...sh.cssRules]; }catch(e){ return []; } }).map(r=>r.cssText).filter(t=>/^\.pr[\s\-.{]/.test(t)).join("");
 }
 function tsvCell(v){ v=String(v??""); return /[\t\n"]/.test(v)? '"'+v.replace(/"/g,'""')+'"' : v; }
 function copyAll(s){

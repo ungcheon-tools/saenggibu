@@ -626,6 +626,7 @@ function auditDraft(text, ctx={}){
   const issues=[];
   if (!t) return issues;
   const add = (level, label, fix, kind) => issues.push({level, label, fix, kind});
+  if (refusalOf(t)) add("must", "생기부 문장이 아님(AI 설명·거절)", "생기부 본문 대신 쓰기를 보류하거나 자료를 요청하는 설명이 들어감. 설명·요청 없이, 소감문에 있는 사실만으로 생기부 본문을 쓸 것.", "refuse");
   const paras = t.split("\n").filter(x=>x.trim()).length, want = ctx.paras===1 ? 1 : 2;
   if (paras!==want) add("must", "문단 "+paras+"개("+want+"개로)", want===1 ? "줄바꿈 없이 한 문단으로 쓸 것(지금 "+paras+"문단)." : "정확히 두 문단으로 쓸 것(지금 "+paras+"문단). 문단 사이 줄바꿈은 한 번만.", "para");
   // 분량: 목표(상·중·하)의 95~103% 밖이면 표시(ctx.target 을 준 곳에서만)
@@ -674,7 +675,22 @@ function auditDraft(text, ctx={}){
   }
   return issues;
 }
-const issueWeight = i => i.level==="must" ? 10 : i.level==="soft" ? 4 : 3;
+const issueWeight = i => i.kind==="refuse" ? 100 : i.level==="must" ? 10 : i.level==="soft" ? 4 : 3;   // 거절·설명문은 어떤 초안보다도 나쁘게
+// AI 가 생기부 본문 대신 선생님께 하는 말(쓰기 보류·자료 요청·설명)을 돌려줬는지 — 소감문이 아주 짧을 때 생김(10-23 사용자 '이게 생기부 문장이야?').
+// 엑셀 modText RefusalOf 와 같은 정규식
+const REFUSE_RE = [
+  /(작성|기록|서술|기재)(을|를)?\s*(보류|중단|멈춤)/,
+  /(사실대로|그대로)\s*(쓰기|작성하기|기록하기|기재하기)(가|는)?\s*어려|기재하기\s*어려/,
+  /주시면|드리겠습니다|드릴게요|해\s*드릴/,
+  /요청하신/,
+  /지어내(게|야|지 않을 수)/,
+  /(입력된|주신|제공된|보내신|받은)\s*소감문(에는|에|은|으로는)/,
+  /(자료|내용|정보)(가|이)\s*(갖춰지면|주어지면|더 있으면|확인되면)/,
+  /작성이\s*가능/,
+  /\b(I cannot|I can't|unable to|please provide)\b/i,
+];
+function refusalOf(t){ const s = String(t||""); return REFUSE_RE.some(re=>re.test(s)); }
+const REFUSE_AGAIN = "[다시 요청] 앞의 답은 생기부 본문이 아니라 설명이었습니다. 소감문이 짧아도 쓰기를 보류하거나 자료를 요청하거나 설명하지 말고 생기부 본문만 출력하세요. 소감문에 있는 사실(한 활동·한 도서라도)만 바탕으로, 그 활동을 이 과목에서 다루는 개념·원리와 이어 풀어 쓰고 드러난 태도를 덧붙이세요. 소감문에 없는 활동·결과·수치·장면은 만들지 마세요.";
 // 분량 고칠 말: 이 글의 바이트/글자 비율로 목표 글자 수를 셈(AI 는 바이트를 못 세므로 글자 수로)
 function lenGoal(text, ctx){
   const b = neisBytes(text), n = charCount(text), r = n ? b/n : 2.6;
@@ -869,7 +885,7 @@ function checklist(ctx){
     + "3. '학생', '대회', '또한'과 금지 서술어(알게 됨, 배움, 생각해 봄, 느낌, 깨달음, 생각함, 이해함, 다짐함, 함양함) 없음\n"
     + "4. 소감문에 없는 활동·장면·숫자·도서·인물을 넣지 않음\n"
     + "5. 공백 포함 "+ctx.minC+"~"+ctx.maxC+"자\n"
-    + "6. 제목·번호·기호·따옴표·설명 없이 생기부 본문만 출력(도서명의 『』는 써도 됨)\n"
+    + "6. 제목·번호·기호·따옴표·설명 없이 생기부 본문만 출력(도서명의 『』는 써도 됨). 소감문이 짧아도 쓰기를 보류하거나 자료를 요청하지 말고 소감문에 있는 사실만으로 씀\n"
     + "7. 학생을 낮추는 부정적 표현(부족함·미흡함·소극적임 등)과 다른 학생과의 비교·서열 표현이 없음";
 }
 function firstAsk(ctx){
@@ -1114,6 +1130,12 @@ async function generateFor(subj, stu, signal, onRetry){
   const ask = async user => normalizeParagraphs(cleanup(await callAI(ctx.system, user, signal, onRetry)), ctx.paras);
   const trimmed = t => neisBytes(t)>ctx.cap ? normalizeParagraphs(trimToMaxBytes(t, ctx.cap-2), ctx.paras) : t;
   let best = await ask(firstAsk(ctx));
+  // 생기부 본문 대신 쓰기 보류·자료 요청 같은 설명을 돌려주면 한 번 더 분명히 요청하고, 그래도면 결과 칸에 넣지 않고 까닭을 알림
+  if (refusalOf(best)){
+    if (mode==="key") await sleep(4000, signal).catch(()=>{ throw new AIError("stop","중지됨"); });
+    best = await ask(firstAsk(ctx) + "\n\n" + REFUSE_AGAIN);
+    if (refusalOf(best)) throw new AIError("refuse", "AI가 생기부 문장 대신 설명을 돌려줘서 넣지 않았어요(소감문이 너무 짧아요). 소감문에 한 활동·과정·느낀 점을 몇 줄 더 적고 다시 생성하세요. — AI의 말: "+best.replace(/\s+/g," ").slice(0,90)+"…");
+  }
   let bestSt = assess(best, ctx), bestScore = scoreOf(bestSt, ctx), misses = 0;
   // 1) 지침·문체·분량을 함께 고쳐 쓰기(최대 3번)
   for (let round=1; round<=3 && needsFix(bestSt); round++){

@@ -141,6 +141,7 @@ table.imp tr.detail td{background:var(--surface2)}
 .col-label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:.78rem;font-weight:600;color:var(--muted)}
 .meter{font-variant-numeric:tabular-nums;font-weight:600}
 .meter.ok{color:var(--good)} .meter.low{color:var(--warn)} .meter.over{color:var(--bad)}
+.thin-note{font-size:.76rem;line-height:1.45;color:var(--warn);background:var(--warn-soft);border-radius:6px;padding:5px 9px}
 .checks{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:.76rem}
 .checks .lbl{color:var(--muted);font-weight:600;margin-right:2px}
 .checks.ok .lbl{color:var(--good)}
@@ -701,6 +702,12 @@ function lenFix(text, ctx){
   return g.b < ctx.minB
     ? "분량이 모자람: 지금 공백 포함 약 "+g.n+"자 → "+g.lo+"~"+g.hi+"자(목표 약 "+g.goal+"자)로, 약 "+d+"자(문장 "+Math.max(1,Math.round(d/60))+"개 정도)를 더 쓸 것. 소감문에 있는데 빠진 방법·자료·과정·맡은 역할을 살리거나, 이미 쓴 장면이 보여주는 역량·태도를 평가하는 문장을 덧붙일 것."+(ctx.thin ? " "+thinFill(ctx.cat) : "")+" 소감문에 없는 사실·장면·숫자는 만들지 말 것."
     : "분량이 넘침: 지금 공백 포함 약 "+g.n+"자 → "+g.lo+"~"+g.hi+"자(목표 약 "+g.goal+"자)로, 약 "+d+"자를 줄일 것. 겹치는 평가 문장과 꾸밈말부터 덜어 내고 활동 사실은 남길 것.";
+}
+// 소감문이 짧을 때(생기부 목표의 30% 미만 — genContext 의 thin 과 같은 기준) 결과 밑에 띄우는 안내. 엑셀 ThinWarn(K칸)과 같은 글
+function thinWarn(s, stu){
+  const tgt = tierTarget(s, stu), eb = neisBytes(stu.essay||"");
+  if (!(eb < tgt*0.3)) return "";
+  return "소감문이 짧아요(소감문 "+eb.toLocaleString()+"B · 생기부 목표 "+tgt.toLocaleString()+"B의 "+Math.round(eb/tgt*100)+"%). 분량을 채우느라 소감문에 없는 활동·결과가 들어갔을 수 있으니 한 문장씩 확인하세요. 수업 장면·한 일·느낀 점을 몇 줄 더 적고 다시 생성하면 나아져요.";
 }
 // 카드·내보내기·출력에서 쓰는 점검: 탭의 문단 수와 학생의 분량 목표까지
 function lenBand(s, stu){ const max=catOf(s.cat).max, target=tierTarget(s,stu); return {target, minB:Math.round(target*LEN_LO), cap:Math.min(max, Math.round(target*LEN_HI))}; }
@@ -1456,6 +1463,7 @@ function studentCard(s, stu, i){
     el("div",{class:"stu-body"},
       el("div",{class:"col"}, el("div",{class:"col-label"},el("span",{text:"소감문"}), el("span",{class:"meter essay-meter",text:stu.essay? neisBytes(stu.essay).toLocaleString()+"B":""})), essay),
       el("div",{class:"col"}, el("div",{class:"col-label"},el("span",{text:"생기부 문장"}), el("span",{class:"meta"}, meter, el("span",{class:"preset-tag",text:"지침: "+((stu.preset&&stu.preset!==s.preset)?stu.preset:tabPreset)}))), res,
+        el("div",{class:"thin-note",hidden:true}),
         el("div",{class:"checks",hidden:true}),
         el("div",{class:"spell",hidden:true}))
     )
@@ -1491,6 +1499,9 @@ function refreshMeter(card,s,stu){
   const issues = stu.result.trim() ? auditFor(s, stu) : [];
   updateSum(card, stu, issues);
   renderSpell(card, s, stu);
+  // 소감문이 짧은데(목표의 30% 미만) 분량대로 채운 글이면 결과 바로 밑에 확인 안내(10-23 사용자)
+  const tn = card.querySelector(".thin-note");
+  if (tn){ const w = stu.result.trim() && !working.has(stu.id) ? thinWarn(s, stu) : ""; tn.hidden = !w; tn.textContent = w; }
   const box = card.querySelector(".checks"); if (!box) return;
   if (!stu.result.trim()){ box.hidden=true; box.replaceChildren(); return; }
   box.hidden=false;

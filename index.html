@@ -159,6 +159,7 @@ button.chk-chip.fixing{opacity:1;border-style:dashed;border-color:currentColor}
 .sp-chip{padding:1px 8px;border-radius:99px;background:var(--accent-soft);color:var(--accent);font-weight:600;cursor:help}
 .sp-chip s{opacity:.65;font-weight:500}
 .spell .undo{padding:1px 8px;font-size:inherit;font-weight:600;border-radius:99px}
+.spell .sp-site{margin-left:auto;display:inline-flex;gap:6px;align-items:center}
 .err{font-size:.82rem;background:var(--bad-soft);color:var(--bad);padding:6px 10px;border-radius:8px}
 .result.empty{background:var(--surface2)}
 .empty-state{text-align:center;color:var(--muted);padding:28px 10px;border:1px dashed var(--line);border-radius:var(--radius)}
@@ -1393,7 +1394,6 @@ function renderPanel(){
       el("button",{onclick:()=>{ s.students.push(newStudent()); save(); renderPanel(); }, disabled:!!running},"+ 학생 추가"),
       el("button",{onclick:()=>exportXlsx(s), disabled:!s.students.length},"엑셀 파일로 내보내기"),
       el("button",{onclick:()=>openPrint(s), disabled:!s.students.length, title:"엑셀로 내보내는 표를 가로 A4로 바로 출력하거나 PDF로 저장해요"},"출력하기"),
-      el("button",{onclick:()=>openNara(s), disabled:!!running || !s.students.some(x=>x.result.trim()), title:"생기부 문장을 바른한글 맞춤법 검사기(가입 없이 개인 무료)로 한꺼번에 검사하고, 고친 글을 학생마다 다시 넣어요"},"맞춤법 검사(바른한글)"),
       el("button",{onclick:()=>copyAll(s), disabled:!s.students.length},"엑셀용 전체 복사"),
       foldAll
     ),
@@ -1521,9 +1521,9 @@ function refreshMeter(card,s,stu){
 function renderSpell(card, s, stu){
   const box = card.querySelector(".spell"); if (!box) return;
   const sp = stu.spell;
-  if (!sp || !stu.result.trim() || working.has(stu.id)){ box.hidden=true; box.replaceChildren(); box.className="spell"; return; }
+  if (!stu.result.trim() || working.has(stu.id)){ box.hidden=true; box.replaceChildren(); box.className="spell"; return; }
   box.hidden=false;
-  const list = sp.list||[];
+  const list = (sp && sp.list)||[];
   // 어디서 확인했는지: 바른한글(선생님이 직접) · AI ('바른 검사기'는 바른 키를 쓰던 예전 판 결과를 그대로 보이려고 남김)
   const via = !sp ? "" : sp.via==="바른" ? " · 바른 검사기" : sp.via==="바른한글" ? " · 바른한글에서 확인" : sp.via==="AI" ? (sp.fallback ? " · AI로 확인("+sp.fallback+")" : " · AI") : (sp.fallback ? " · "+sp.fallback : "");
   box.className = "spell"+(list.length?" fixed":"");
@@ -1535,32 +1535,16 @@ function renderSpell(card, s, stu){
       stu.spellOrig!=null ? el("button",{type:"button",class:"sm undo",title:"맞춤법 교정 전 글로 되돌려요",disabled:!!running,onclick:()=>{
         stu.result=stu.spellOrig; stu.spellOrig=null; stu.spell=null; stu.prevResult=null; save();
         const r=card.querySelector("textarea.result"); if (r) r.value=stu.result; refreshMeter(card,s,stu); setStatus("맞춤법 교정 전 글로 되돌렸어요.","good"); }},"교정 전으로") : null];
-  } else {
+  } else if (sp){
     items = [el("span",{class:"lbl",text: (sp.rejected ? "맞춤법 교정: 내용까지 바꿔서 쓰지 않음("+sp.rejected+")" : sp.skipped ? "맞춤법 교정: 못 함("+sp.skipped+")" : "맞춤법·띄어쓰기: 고칠 곳 없음") + via})];
   }
-  box.replaceChildren(...items.filter(Boolean));
+  box.replaceChildren(...items.filter(Boolean), naraTools(card, s, stu));
 }
-// 바른한글(부산대·나라인포테크 맞춤법 검사기, 가입 없이 개인 무료)을 거쳐 오기 — 자동 연결은 그 사이트가 막아(보안 확인·다른 사이트에서 부르기 금지)
-// 학생들을 [[카드 번호]] 줄로 묶어 한 번에 복사 → 선생님이 바른한글에서 검사 → 고친 글을 통째로 붙여넣으면 번호대로 나눠 학생마다 넣음.
-// 사이트 한 번 분량을 확인하지 못해 '한 번에 보낼 양'씩 묶음으로 나눔. 맞춤법 말고도 바뀐 학생은 넣지 않고 까닭을 남김
+// 바른한글(부산대·나라인포테크 맞춤법 검사기, 가입 없이 개인 무료)을 학생마다 거쳐 오기 — 자동 연결은 그 사이트가 막아(보안 확인·다른 사이트에서 부르기 금지)
+// 카드의 [바른한글에서 검사 ↗]: 그 학생 글을 복사(이름은 ○○)하고 창을 엶 → 선생님이 검사 → 고친 글을 [검사한 글 넣기]에 붙여넣으면
+// 고친 곳을 보여 주고 '교정 전으로'를 남김. 맞춤법 말고도 바뀌었으면 한 번 더 물어봄(10-23 사용자 '개개인으로 다시, 전체 검사칸은 삭제')
 const NARA_URL = "https://nara-speller.co.kr/speller/";
-const NARA_SIZES = [[1000,"1,000자"],[3000,"3,000자"],[10000,"10,000자"],[0,"나누지 않음"]];
 function naraMask(stu){ const nm = String(stu.name||"").trim(); return nm.length>=2 && stu.result.includes(nm) ? stu.result.split(nm).join("○○") : stu.result; }
-function naraText(group){ return group.map(x=>"[["+x.no+"]]\n"+naraMask(x.stu)).join("\n"); }
-function naraGroups(items, size){
-  const out=[]; let cur=[], n=0;
-  for (const x of items){ const len = charCount(x.stu.result)+8; if (size && cur.length && n+len>size){ out.push(cur); cur=[]; n=0; } cur.push(x); n+=len; }
-  if (cur.length) out.push(cur);
-  return out;
-}
-// 붙여넣은 글을 [[번호]] 로 나눔(줄바꿈이 없어져도 찾음)
-function naraSplit(text){
-  const out = new Map(), t = String(text||"").replace(/\r\n?/g,"\n"), re = /\[\[\s*(\d+)\s*\]\]/g;
-  let m, last = null, pos = 0;
-  while ((m = re.exec(t))){ if (last!=null) out.set(last, t.slice(pos, m.index)); last = Number(m[1]); pos = re.lastIndex; }
-  if (last!=null) out.set(last, t.slice(pos));
-  return out;
-}
 // 붙여넣다 문단이 합쳐지거나 갈라졌으면 원래 글의 문단 나눔(문단마다 문장 수)대로 다시 나눔
 function reflowLike(base, cand){
   const bp = base.split("\n").map(x=>x.trim()).filter(Boolean), cp = cand.split("\n").map(x=>x.trim()).filter(Boolean);
@@ -1569,8 +1553,8 @@ function reflowLike(base, cand){
   if (cs.length === counts.reduce((a,b)=>a+b,0)){ let i=0; return counts.map(k=>{ const part=cs.slice(i,i+k).join(" "); i+=k; return part; }).join("\n"); }
   return normalizeParagraphs(cand, bp.length);
 }
-// 한 학생에 넣기: 가린 이름 되돌림 → 문단 맞춤 → 맞춤법만 바뀌었을 때만 바꿈('교정 전으로' 남김)
-function naraApply(s, stu, raw){
+// 한 학생에 넣기: 가린 이름 되돌림 → 문단 맞춤 → 맞춤법만 바뀌었을 때(또는 force) 바꿈('교정 전으로' 남김)
+function naraApply(s, stu, raw, force){
   const nm = String(stu.name||"").trim(), base = stu.result;
   let cand = cleanup(raw||"");
   if (nm.length>=2) cand = cand.split("○○").join(nm);
@@ -1578,85 +1562,48 @@ function naraApply(s, stu, raw){
   cand = reflowLike(base, cand);
   if (cand===base){ if (!(stu.spell && stu.spell.list && stu.spell.list.length)) stu.spell = {list:[], via:"바른한글"}; return {state:"same"}; }
   const why = spellPassable(base, cand, genContext(s, stu));
-  if (why) return {state:"skip", why};
+  if (why && !force) return {state:"skip", why};
   const list = spellChanges(base, cand);
   stu.spellOrig = base; stu.result = cand; stu.spell = {list, via:"바른한글"}; stu.prevResult = null; delete stu.prevParas;
   return {state:"fixed", n:list.length};
 }
-function openNara(s){
-  const o = Object.assign({who:"result", size:3000}, prefs().nara||{});
-  const nRes = s.students.filter(x=>x.result.trim()).length, nChk = s.students.filter(x=>x.checked && x.result.trim()).length;
-  if (o.who==="checked" && !nChk) o.who = "result";
-  let groups = [], gi = 0, fixedAll = 0, spotsAll = 0;
-  const head = el("p",{class:"hint", style:"margin:0;font-weight:700"});
-  const msg = el("p",{class:"hint", style:"margin:0"});
-  const log = el("div",{class:"hint", style:"margin:0;max-height:140px;overflow:auto;display:flex;flex-direction:column;gap:2px"});
-  const ta = el("textarea",{rows:"7", style:"width:100%", placeholder:"바른한글에서 고친 글 전체를 여기에 붙여넣기(Ctrl+V) — [[1]] 같은 번호 줄도 함께"});
-  // 자동 복사가 막힌 곳(일부 브라우저·앱 안 창)에서는 보낼 글을 이 칸에 골라 두어 Ctrl+C 로 직접 복사
-  const srcTa = el("textarea",{rows:"5", readonly:true, hidden:true, style:"width:100%"});
-  const copyB = el("button",{class:"primary", onclick: async ()=>{
-    const g = groups[gi]; if (!g) return;
-    g.forEach(x=>{ x.base = x.stu.result; });
-    const text = naraText(g);
-    // 바른한글 창을 열기 '전에' 복사를 끝냄(창이 먼저 열리면 이 화면이 포커스를 잃어 복사가 막혀 빈 클립보드가 됨)
-    let ok = copyNow(text);
-    if (!ok){ try{ await navigator.clipboard.writeText(text); ok = true; }catch(e){ ok = false; } }
-    if (ok){
-      srcTa.hidden = true;
-      setStatus("복사했어요("+charCount(text).toLocaleString()+"자). 열린 바른한글 창 입력란에 Ctrl+V → 검사 → 고친 글 전체를 복사(Ctrl+A → Ctrl+C)해 와서 ②에 붙여넣으세요.","good");
-      msg.textContent = "바른한글 창이 안 열리면 주소창에 nara-speller.co.kr/speller 를 넣으세요."; msg.className = "hint";
-    } else {
-      srcTa.value = text; srcTa.hidden = false; srcTa.focus(); srcTa.select();
-      msg.textContent = "이 화면에서는 자동 복사가 막혀 있어요. 위 칸의 글이 골라져 있으니 Ctrl+C 로 복사한 뒤 바른한글 입력란에 Ctrl+V 하세요."; msg.className = "hint red";
-      setStatus("자동 복사가 막혀 있어요 — 맞춤법 검사 창의 보낼 글을 Ctrl+C 로 복사해 주세요.","bad");
-    }
-    try{ window.open(NARA_URL, "_blank", "noopener"); }catch(e){}
-    if (ok) setTimeout(()=>ta.focus(), 50);
-  }}, "① 복사하고 바른한글 열기 ↗");
-  const putB = el("button",{class:"primary", onclick:()=>{
-    const g = groups[gi]; if (!g) return;
-    if (running){ msg.textContent = "생성이 끝난 뒤 넣어 주세요."; msg.className = "hint red"; return; }
-    const parts = naraSplit(ta.value);
-    if (!parts.size){ msg.textContent = "[[번호]] 줄을 찾지 못했어요. 바른한글에서 고친 글을 번호 줄까지 통째로 복사해 붙여넣으세요."; msg.className = "hint red"; return; }
-    const res = [];
-    for (const x of g){
-      const who = x.no+"번 "+(x.stu.name||"");
-      if (!parts.has(x.no)){ res.push(who+" 못 찾음(번호 줄이 없음)"); continue; }
-      if (x.base!=null && x.stu.result!==x.base){ res.push(who+" 건너뜀(그사이 글이 바뀜)"); continue; }
-      const r = naraApply(s, x.stu, parts.get(x.no));
-      if (r.state==="fixed"){ fixedAll++; spotsAll += r.n; res.push(who+" "+r.n+"곳 고침"); }
-      else if (r.state==="same") res.push(who+" 그대로");
-      else res.push(who+" 건너뜀("+r.why+")");
-    }
-    save(); renderPanel();
-    log.append(el("div",{text:(groups.length>1 ? "묶음 "+(gi+1)+": " : "")+res.join(" · ")}));
-    gi++; show();
-    setStatus("바른한글 교정: "+fixedAll+"명 "+spotsAll+"곳 고침"+(gi<groups.length ? " — 다음 묶음을 이어서 하세요." : ". 학생마다 [교정 전으로]로 되돌릴 수 있어요."),"good");
-  }}, "② 넣기");
-  const show = () => {
-    ta.value = ""; msg.textContent = ""; srcTa.hidden = true;
-    if (!groups.length){ head.textContent = "검사할 학생이 없어요(생기부 문장이 있는 학생만)."; copyB.disabled = putB.disabled = true; return; }
-    if (gi>=groups.length){ head.textContent = "모두 끝났어요 — "+fixedAll+"명 "+spotsAll+"곳 고침. 건너뛴 학생은 카드에서 직접 고치세요."; copyB.hidden = putB.hidden = ta.hidden = true; return; }
-    const g = groups[gi];
-    copyB.disabled = putB.disabled = false;
-    head.textContent = (groups.length>1 ? "묶음 "+(gi+1)+"/"+groups.length+" · " : "")+g[0].no+(g.length>1 ? "~"+g[g.length-1].no : "")+"번 "+g.length+"명 · "+charCount(naraText(g)).toLocaleString()+"자";
+function naraTools(card, s, stu){
+  return el("span",{class:"sp-site"},
+    el("button",{type:"button", class:"sm undo", disabled:!!running, title:"이 학생 생기부 문장을 복사하고 바른한글 맞춤법 검사기(가입 없이 개인 무료)를 새 창으로 열어요. 그 창 입력란에 Ctrl+V → 검사", onclick:()=>copyForNara(card, stu)}, "바른한글에서 검사 ↗"),
+    el("button",{type:"button", class:"sm undo", disabled:!!running, title:"바른한글에서 고친 글을 붙여넣으면 고친 곳을 보여 주고 바꿔요(교정 전으로 되돌리기 가능)", onclick:()=>pasteNara(card, s, stu)}, "검사한 글 넣기"));
+}
+async function copyForNara(card, stu){
+  const text = naraMask(stu), hide = text !== stu.result;
+  // 바른한글 창을 열기 '전에' 복사를 끝냄(창이 먼저 열리면 이 화면이 포커스를 잃어 복사가 막혀 빈 클립보드가 됨)
+  let ok = copyNow(text);
+  if (!ok){ try{ await navigator.clipboard.writeText(text); ok = true; }catch(e){ ok = false; } }
+  if (!ok){ const r = card.querySelector("textarea.result"); if (r){ r.focus(); r.select(); } }
+  try{ window.open(NARA_URL, "_blank", "noopener"); }catch(e){}
+  if (ok) setStatus("생기부 문장을 복사했어요"+(hide ? "(학생 이름은 ○○로)" : "")+". 열린 바른한글 창 입력란에 Ctrl+V → 검사 → 고친 글을 복사해 와서 이 카드의 [검사한 글 넣기]를 누르세요. 창이 안 열리면 주소창에 nara-speller.co.kr/speller","good");
+  else setStatus("이 화면에서는 자동 복사가 막혀 있어요. 결과 칸 글이 골라져 있으니 Ctrl+C 로 복사해 바른한글 입력란에 Ctrl+V 하세요(학생 이름이 있으면 지우고).","bad");
+}
+function pasteNara(card, s, stu){
+  const ta = el("textarea",{rows:"8", style:"width:100%", placeholder:"바른한글에서 고친 글을 여기에 붙여넣기(Ctrl+V)"});
+  const msg = el("p",{class:"small", style:"margin:6px 0 0;color:var(--bad)"});
+  const base = stu.result;
+  let warned = null;
+  const go = () => {
+    if (running || stu.result !== base){ closeModal(); setStatus("그사이 글이 바뀌어 넣지 않았어요. 다시 해 주세요.","bad"); return; }
+    const raw = ta.value||"";
+    if (!cleanup(raw).trim()){ msg.textContent = "붙여넣은 글이 없어요."; return; }
+    const r = naraApply(s, stu, raw, warned===raw);
+    if (r.state==="skip"){ warned = raw; msg.textContent = "맞춤법 말고도 바뀐 곳이 있어요("+r.why+"). 다른 글을 붙여넣지 않았는지 확인하고, 그래도 넣으려면 [넣기]를 한 번 더 누르세요."; return; }
+    closeModal(); save();
+    const rt = card.querySelector("textarea.result"); if (rt) rt.value = stu.result;
+    refreshMeter(card, s, stu);
+    setStatus(r.state==="same" ? "바른한글에서도 고칠 곳이 없었어요(글이 같아요)." : "바른한글에서 고친 글을 넣었어요"+(r.n ? "("+r.n+"곳)" : "")+". 되돌리려면 [교정 전으로].","good");
   };
-  const rebuild = () => {
-    setPref("nara", {who:o.who, size:o.size});
-    const items = s.students.map((x,i)=>({stu:x, no:i+1})).filter(x=>x.stu.result.trim() && !working.has(x.stu.id) && (o.who!=="checked" || x.stu.checked));
-    groups = naraGroups(items, o.size); gi = 0; log.replaceChildren(); show();
-  };
-  const radio = (v, label, n) => el("label",{class:"chk-line"}, el("input",{type:"radio", name:"naraWho", value:v, checked:o.who===v, disabled:!n, onchange:()=>{ o.who=v; rebuild(); }}), " "+label+" ("+n+"명)");
-  const sizeSel = el("select",{onchange:e=>{ o.size = Number(e.target.value); rebuild(); }}, ...NARA_SIZES.map(([v,t])=>el("option",{value:String(v), selected:o.size===v}, t)));
   setModalWide(false);
-  showModal(el("h2",{text:"맞춤법 검사(바른한글) — "+(s.name||"이 탭")}),
-    el("p",{class:"hint", style:"margin:0"}, "여러 학생의 생기부 문장을 [[카드 번호]] 줄로 묶어 한 번에 복사해요. 바른한글(가입 없이 개인 무료)에서 검사한 뒤 고친 글을 통째로 붙여넣으면 번호대로 나눠 학생마다 넣어요. 맞춤법 말고도 바뀐 학생은 넣지 않아요. 학생 이름은 ○○로 바꿔 보내요."),
-    el("div",{class:"f", style:"display:flex;flex-direction:column;gap:4px"}, el("b",{text:"검사할 학생"}),
-      radio("result","생기부 문장이 있는 학생", nRes), radio("checked","체크한 학생만", nChk)),
-    el("div",{class:"row", style:"align-items:center;gap:6px"}, el("b",{text:"한 번에 보낼 양"}), sizeSel, el("span",{class:"hint", text:"바른한글이 글을 자르면 줄이세요"})),
-    head, el("div",{class:"row"}, copyB), srcTa, ta, el("div",{class:"row", style:"justify-content:flex-end"}, putB), msg, log,
-    el("div",{class:"row", style:"justify-content:flex-end"}, el("button",{onclick:closeModal}, "닫기")));
-  rebuild();
+  showModal(el("h3",{text:"바른한글에서 검사한 글 넣기 — "+(stu.name||"이 학생"), style:"margin:0 0 6px"}),
+    el("p",{class:"small", style:"margin:0 0 6px", text:"바른한글 창에서 고친 글 전체를 복사(Ctrl+A → Ctrl+C)해 아래에 붙여넣으세요. 고친 곳을 카드에 보여 주고, [교정 전으로]로 되돌릴 수 있어요."}),
+    ta, msg,
+    el("div",{class:"row", style:"justify-content:flex-end;margin-top:8px"}, el("button",{onclick:closeModal},"취소"), el("button",{class:"primary", onclick:go},"넣기")));
+  setTimeout(()=>ta.focus(), 30);
 }
 // 점검 항목의 종류(숫자·따옴표 안 글자를 뺀 이름): 고친 뒤 그 항목이 없어졌는지 견줄 때
 function issueKey(label){ return String(label||"").replace(/'[^']*'|‘[^’]*’|「[^」]*」|\d+(?:,\d+)*|\([^)]*\)/g,"").replace(/\s+/g," ").trim(); }

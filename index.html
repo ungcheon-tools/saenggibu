@@ -777,6 +777,15 @@ function geminiFallback(model){
   const pick = ["gemini-3.5-flash-lite","gemini-3.1-flash-lite"].concat(have.filter(x=>/flash-lite/.test(x))).find(x=>x!==model && have.includes(x));
   return pick || "";
 }
+// 무료 Gemini 키는 분당 요청 수 한도가 있어 요청 '시작' 사이를 4초 띄움 — 앞 요청이 4초 넘게 걸렸으면 기다리지 않음.
+// 학생 여럿을 함께 만들 때도 이 자리 잡기(nextSlot)로 차례를 맞춤. 다른 AI 회사·Claude 화면은 띄우지 않고, 한도에 걸리면 아래 다시 시도가 맡음
+const KEY_GAP = {gemini: 4000};
+let nextSlot = 0;
+async function paceKey(prov, signal){
+  const gap = KEY_GAP[prov] || 0; if (!gap) return;
+  const now = Date.now(), slot = Math.max(now, nextSlot); nextSlot = slot + gap;
+  if (slot > now){ try{ await sleep(slot - now, signal); }catch(e){ throw new AIError("stop","중지됨"); } }
+}
 async function callAI(system, user, signal, onRetry, opts={}){
   if (mode==="claude"){
     const prompt = (system ? system + "\n\n[입력]\n" : "") + user
@@ -810,6 +819,7 @@ async function callAI(system, user, signal, onRetry, opts={}){
     for (let attempt=1; attempt<=4; attempt++){
       let res;
       const req = buildRequest(prov, key, model, system, user, opts);
+      await paceKey(prov, signal);
       try{
         res = await fetch(req.url,{method:"POST",headers:req.headers,body:req.body,signal});
       }catch(e){
@@ -882,7 +892,7 @@ function genContext(subj, stu){
   const level = levelOf(subj, stu), levelText = levelRule(level);
   // 소감문이 짧아도(목표의 30% 미만) 분량은 목표(분량 상·중·하)대로 채운다(사용자 10-23) — 대신 소감문 안에서 채우는 방법을 알려 지어내기를 막음
   const thin = neisBytes(stu.essay||"") < target*0.3;
-  const lengthRule = "[분량 - 반드시 지킬 것] 공백 포함 약 "+maxC+"자(나이스 "+target+"바이트)를 꽉 채워 쓰세요. 최소 "+minC+"자 이상이어야 합니다. 문장 "+sentences+"~"+(sentences+2)+"개가 알맞습니다. "+(subj.cat==="행특" ? "분량이 짧으니 대표 장면 한두 개를 깊이 있게 쓰고, 활동을 나열하지 마세요." : "짧게 끝내지 말고, 각 활동마다 과정과 의미를 충분히 풀어 쓰세요.")
+  const lengthRule = "[분량 - 반드시 지킬 것] 공백 포함 약 "+maxC+"자(나이스 "+target+"바이트)를 꽉 채워 쓰세요. 최소 "+minC+"자 이상이어야 합니다. 문장 "+sentences+"~"+(sentences+2)+"개가 알맞습니다. "+(paras===2 ? "첫 문단 약 "+Math.round(maxC*0.55)+"자, 둘째 문단 약 "+(maxC-Math.round(maxC*0.55))+"자로 쓰세요. " : "")+(subj.cat==="행특" ? "분량이 짧으니 대표 장면 한두 개를 깊이 있게 쓰고, 활동을 나열하지 마세요." : "짧게 끝내지 말고, 각 활동마다 과정과 의미를 충분히 풀어 쓰세요.")
     + (thin ? " "+thinFill(subj.cat) : "") + " 분량을 채우려고 새 사실·장면을 만들거나 평가·꾸밈말을 부풀리지 마세요.";
   const system = baseText + "\n\n" + variety + (levelText ? "\n\n" + levelText : "") + "\n\n" + lengthRule + (paras===1 ? "\n\n" + PARA_ONE : "");
   return {max, target, minB, cap, minC, maxC, sentences, paras, thin, cat: subj.cat, base: baseText, variety, level, levelText, lengthRule, system, presetKey: usePreset ? "p:"+stu.preset : "tab",
@@ -1021,6 +1031,53 @@ function fixBetter(before, after, ctx, kinds){
   return targetSize(after, ctx, kinds) < targetSize(before, ctx, kinds);
 }
 // kinds 의 문제를 문장 단위로 고치기(최대 rounds 번, 나아질 때만 받아들이고 이어서 고침)
+// ---------- 분량이 모자랄 때 문장 더하기 ----------
+// 글 전체를 다시 쓰게 하면 길이가 흔들리고 좋은 문장도 바뀌어서, 모자란 글자 수만큼 새 문장만 받아(JSON) 문단마다 끝 문장 앞에 끼운다.
+// 받아들이는 조건: 꼭 고칠 것이 늘지 않고(mustCounts), 분량이 목표에 더 가까워질 때. 넘치면 문장 끝에서 자름
+function addMoreAsk(ctx, text){
+  const ps = splitParas(text), g = lenGoal(text, ctx), need = Math.max(0, g.goal - g.n);
+  const nAdd = Math.max(1, Math.round(need/50));   // 한 문장 50~70자로 쓰게 하므로 조금 넉넉히(넘치면 문장 끝에서 자름)
+  const per = ps.length>1 ? [Math.ceil(nAdd/2), Math.floor(nAdd/2)] : [nAdd];
+  const used = [...new Set(ps.flat().map(finalWord).filter(Boolean))];
+  return "[문장 더하기 요청]\n아래 [글]은 생기부 글을 문단마다 한 줄에 한 문장씩 적은 것입니다. 분량이 모자라 약 "+need+"자를 더 써야 합니다. 이미 있는 문장은 그대로 두고, 더할 새 문장만 쓰세요.\n"
+    + "- " + ps.map((p,i)=>(i+1)+"문단에 "+(per[i]||0)+"문장").filter((x,i)=>per[i]).join(", ") + "(한 문장 50~70자 안팎). 새 문장은 그 문단의 마지막 문장 바로 앞에 들어갑니다.\n"
+    + "- 소감문에 있는 활동의 과정·방법·자료·맡은 역할을 더 자세히 풀거나, 그 활동을 과목에서 다루는 개념·원리와 이어 설명하거나, 이미 쓴 장면이 보여 주는 역량·태도를 평가하세요. 이미 있는 문장과 같은 내용을 되풀이하지 마세요.\n"
+    + "- 소감문에 없는 활동·결과·숫자·도서·인물은 만들지 마세요. '학생', '대회', '또한'과 금지 서술어(알게 됨, 배움, 생각해 봄, 느낌, 깨달음, 생각함, 이해함, 다짐함, 함양함)를 쓰지 마세요.\n"
+    + "- 끝맺음은 ~함/~임/~됨/~보임/~드러남/~지님 같은 명사형으로 하되 앞뒤 문장과 겹치지 않게 하고 '~다.'로 끝내지 마세요. [이미 쓴 서술어]는 다시 쓰지 마세요.\n\n"
+    + (used.length ? "[이미 쓴 서술어]\n" + used.join(", ") + "\n\n" : "")
+    + "[학생 소감문]\n\"\"\"\n" + ctx.essay + "\n\"\"\"\n\n[글]\n" + ps.map((p,i)=>"("+(i+1)+"문단)\n"+p.join("\n")).join("\n")
+    + "\n\n더할 문장만 JSON 하나로 답하세요. 문단 번호를 키로, 그 문단에 더할 문장 배열을 값으로 씁니다. 예: {\"1\": [\"새 문장.\"], \"2\": [\"새 문장.\"]}";
+}
+function applyAddMore(text, data){
+  const ps = splitParas(text);
+  const key = x => String(x).replace(/[\s.,!?·'"‘’“”]/g,"");
+  const seen = new Set(ps.flat().map(key)), heads = new Set(ps.flat().map(x=>key(x).slice(0,15)));
+  if (data && typeof data==="object" && !Array.isArray(data) && (data.add||data.sentences)) data = data.add||data.sentences;
+  if (Array.isArray(data)) data = {"1": data};
+  if (!data || typeof data!=="object") return text;
+  let added = 0;
+  ps.forEach((p,i)=>{
+    let xs = data[String(i+1)] || data[i+1]; if (typeof xs==="string") xs=[xs];
+    xs = (Array.isArray(xs)?xs:[]).map(x=>cleanup(String(x||"")).replace(/\s+/g," ").trim()).filter(x=>x.replace(/[\s.!?]/g,"").length>5)
+      .map(x=>/[.!?]$/.test(x) ? x : x+".")
+      .filter(x=>{ const k=key(x); if (seen.has(k) || heads.has(k.slice(0,15))) return false; seen.add(k); heads.add(k.slice(0,15)); return true; });
+    if (!xs.length) return;
+    const at = p.length>1 ? p.length-1 : p.length;   // 문단 끝 맺음 문장은 그대로 끝에
+    p.splice(at, 0, ...xs); added += xs.length;
+  });
+  return added ? joinParas(ps) : text;
+}
+async function addMore(ctx, text, signal, onRetry){
+  const data = parseJsonLoose(await callAI(ctx.system, addMoreAsk(ctx, text), signal, onRetry, {json:true, maxTokens:3000}));
+  let next = applyAddMore(text, data);
+  if (next===text) return {text};
+  if (neisBytes(next) > ctx.cap) next = normalizeParagraphs(trimToMaxBytes(next, ctx.cap-2), ctx.paras);
+  const A = assess(text, ctx), B = assess(next, ctx);
+  const lenPen = st => (st.bytes<ctx.minB ? (ctx.minB-st.bytes)/ctx.target*100 : 0) + (st.bytes>ctx.cap ? (st.bytes-ctx.cap)/ctx.target*40 : 0);
+  if (mustWorse(mustCounts(text, A, ctx, []), mustCounts(next, B, ctx, []))) return {text};
+  if (!(lenPen(B) < lenPen(A))) return {text};
+  return {text: next};
+}
 async function fixSentences(ctx, text, kinds, signal, onRetry, rounds=2){
   let cur = text, misses = 0, calls = 0;
   for (let r=0; r<rounds && misses<2; r++){
@@ -1028,7 +1085,6 @@ async function fixSentences(ctx, text, kinds, signal, onRetry, rounds=2){
     if (!iss.length) break;
     const {flat, T} = sentenceTargets(cur, iss, ctx);
     if (!T.size) break;
-    if (calls && mode==="key") await sleep(3000, signal).catch(()=>{ throw new AIError("stop","중지됨"); });
     let data = null; calls++;
     try{ data = parseJsonLoose(await callAI(ctx.system, sentenceFixAsk(ctx, flat, T), signal, onRetry, {json:true, maxTokens:4000})); }
     catch(e){ if (["stop","fatal","limit"].includes(e.kind)) throw e; misses++; continue; }
@@ -1125,7 +1181,6 @@ async function spellPass(text, ctx, signal, onRetry){
   const stopped = e => e && (e.code==="cancelled" || e.kind==="stop");
   const fallback = "";
   try{
-    if (mode==="key") await sleep(4000, signal);
     const r = spellJudge(text, await callAI(SPELL_SYS, spellAsk(text), signal, onRetry), ctx, "AI");
     if (fallback) r.spell.fallback = fallback;
     return r;
@@ -1142,14 +1197,12 @@ async function generateFor(subj, stu, signal, onRetry){
   let best = await ask(firstAsk(ctx));
   // 생기부 본문 대신 쓰기 보류·자료 요청 같은 설명을 돌려주면 한 번 더 분명히 요청하고, 그래도면 결과 칸에 넣지 않고 까닭을 알림
   if (refusalOf(best)){
-    if (mode==="key") await sleep(4000, signal).catch(()=>{ throw new AIError("stop","중지됨"); });
     best = await ask(firstAsk(ctx) + "\n\n" + REFUSE_AGAIN);
     if (refusalOf(best)) throw new AIError("refuse", "AI가 생기부 문장 대신 설명을 돌려줘서 넣지 않았어요(소감문이 너무 짧아요). 소감문에 한 활동·과정·느낀 점을 몇 줄 더 적고 다시 생성하세요. — AI의 말: "+best.replace(/\s+/g," ").slice(0,90)+"…");
   }
   let bestSt = assess(best, ctx), bestScore = scoreOf(bestSt, ctx), misses = 0;
   // 1) 지침·문체·분량을 함께 고쳐 쓰기(최대 3번)
   for (let round=1; round<=3 && needsFix(bestSt); round++){
-    if (mode==="key") await sleep(4000, signal).catch(()=>{ const e=new AIError("stop","중지됨"); e.partial=trimmed(best); throw e; });
     let cand;
     try{ cand = await ask(fixAsk(ctx, best, bestSt)); }
     catch(e){
@@ -1158,11 +1211,17 @@ async function generateFor(subj, stu, signal, onRetry){
     }
     const st = assess(cand, ctx), sc = scoreOf(st, ctx);
     if (sc < bestScore){ best=cand; bestSt=st; bestScore=sc; misses=0; }
-    else if (++misses>=2) break;
+    else if (++misses >= (bestSt.issues.some(i=>i.level==="must" && !i.len) ? 2 : 1)) break;   // 문체만 남았으면 아래 '문장만 고치기'가 더 싸고 정확함
   }
-  // 2) 그래도 분량(목표의 95~103%)을 벗어나면 분량만 콕 집어 맞추기(최대 2번, 나아질 때만)
+  // 2) 그래도 분량(목표의 95~103%)을 벗어나면: 모자라면 새 문장만 더하고(글 전체를 다시 쓰면 길이가 흔들림), 넘치면 줄여 쓰기(최대 2번, 나아질 때만)
   for (let round=1; round<=2 && (bestSt.short || bestSt.long); round++){
-    if (mode==="key") await sleep(4000, signal).catch(()=>{ const e=new AIError("stop","중지됨"); e.partial=trimmed(best); throw e; });
+    if (bestSt.short){
+      let r;
+      try{ r = await addMore(ctx, best, signal, onRetry); }
+      catch(e){ if (["stop","fatal","limit"].includes(e.kind)){ e.partial = trimmed(best); throw e; } break; }
+      if (r.text===best) break;
+      best = r.text; bestSt = assess(best, ctx); bestScore = scoreOf(bestSt, ctx); continue;
+    }
     let cand;
     try{ cand = await ask(lengthAsk(ctx, best)); }
     catch(e){
@@ -1176,7 +1235,6 @@ async function generateFor(subj, stu, signal, onRetry){
   //    '부정적일 수 있는 말'은 탐구 대상을 가리키는 오탐이 많아 자동으로는 고치지 않음(칩을 누르면 고침)
   const leftKinds = [...new Set(bestSt.issues.map(i=>i.kind).filter(k=>SENTENCE_KINDS.includes(k) && k!=="negsoft"))];
   if (leftKinds.length){
-    if (mode==="key") await sleep(4000, signal).catch(()=>{ const e=new AIError("stop","중지됨"); e.partial=trimmed(best); throw e; });
     try{ const r = await fixSentences(ctx, best, leftKinds, signal, onRetry, 2); if (r.text!==best){ best = r.text; bestSt = assess(best, ctx); } }
     catch(e){ if (["stop","fatal","limit"].includes(e.kind)){ e.partial = trimmed(best); throw e; } }
   }
@@ -1630,7 +1688,6 @@ function wholeBetter(before, after, ctx, kind){
 async function fixWhole(ctx, draft, issue, signal, onRetry){
   let cur = draft;
   for (let round=0; round<2; round++){
-    if (round && mode==="key") await sleep(3000, signal).catch(()=>{ throw new AIError("stop","중지됨"); });
     const ask = issue.kind==="len" ? lengthAsk(ctx, cur) : fixOneAsk(ctx, cur, issue, round>0);
     let cand = normalizeParagraphs(cleanup(await callAI(ctx.system, ask, signal, onRetry)), ctx.paras);
     if (neisBytes(cand)>ctx.max && issue.kind!=="len") cand = normalizeParagraphs(trimToMaxBytes(cand, ctx.max-2), ctx.paras);   // 칩에서는 나이스 상한에서만 자름(목표 103%에서 잘라 문장을 지우지 않게)
@@ -1718,30 +1775,34 @@ async function generateAll(s, onlyChecked){
   const ctl = new AbortController(); running={ctl};
   let done=0, ok=0, failed=0, stopMsg="";
   renderPanel(); setProg(0,queue.length);
-  try{
-  for (const stu of queue){
-    if (ctl.signal.aborted) break;
+  // 학생 둘씩 함께 만들기(처리 속도) — 무료 Gemini 는 paceKey 가 요청 '시작' 간격을 맞춤. 중지·한도·치명 오류가 나면 새 학생은 시작하지 않음
+  const POOL = 2;
+  let next = 0, halt = false;
+  const label = () => { const names = queue.filter(x=>working.has(x.id)).map(x=>x.name||x.sid||"학생"); return (names.length ? names.join(", ")+" 작성 중… · " : "")+"끝난 학생 "+done+" / "+queue.length; };   // 도는 동안엔 '완료' 글자를 쓰지 않음(끝난 줄로 읽힘)
+  const one = async stu => {
     working.add(stu.id); stu.error="";
     const card = document.querySelector('.stu[data-id="'+stu.id+'"]');
     if (card){ card.classList.add("working"); card.scrollIntoView({block:"nearest",behavior:"smooth"}); const r=card.querySelector("textarea.result"); if(r) r.placeholder="작성 중…"; refreshMeter(card,s,stu); }
-    setStatus((done+1)+" / "+queue.length+" — "+(stu.name||stu.sid||"학생")+" 작성 중…");
+    setStatus(label());
     try{
-      stu.result = await generateFor(s, stu, ctl.signal, (a,sec,why)=>setStatus((done+1)+" / "+queue.length+" — "+why+": "+sec+"초 기다렸다가 다시 시도해요 ("+a+"/3)"));
+      stu.result = await generateFor(s, stu, ctl.signal, (a,sec,why)=>setStatus(label()+" · "+why+": "+sec+"초 기다렸다가 다시 시도해요 ("+a+"/3)"));
       ok++; stu.prevResult = null; delete stu.prevParas;
       if (onlyChecked) stu.checked = false;
     }catch(e){
       const kept = keepPartial(stu, e);
-      if (e.kind==="stop"){ stopMsg="중지했어요."; working.delete(stu.id); break; }
+      if (e.kind==="stop"){ stopMsg="중지했어요."; halt=true; working.delete(stu.id); return; }
       stu.error = (kept ? "고쳐 쓰기 도중 멈춰 첫 초안을 남겼어요 — " : "")+e.message; if (kept) ok++; else failed++;
-      if (e.kind==="limit"||e.kind==="fatal"){ stopMsg=e.message; working.delete(stu.id); done++; break; }
+      if (e.kind==="limit"||e.kind==="fatal"){ stopMsg=e.message; halt=true; }
     }
     working.delete(stu.id); done++; save();
     const old = document.querySelector('.stu[data-id="'+stu.id+'"]');
     if (old) old.replaceWith(studentCard(s, stu, s.students.indexOf(stu)));
-    refreshMeters(); setProg(done,queue.length);
-    if (ctl.signal.aborted){ stopMsg="중지했어요."; break; }
-    if (mode==="key" && done<queue.length && !ctl.signal.aborted){ try{ await sleep(4000, ctl.signal); }catch(e){ stopMsg="중지했어요."; break; } }
-  }
+    refreshMeters(); setProg(done,queue.length); setStatus(label());
+  };
+  const worker = async () => { while (!halt && !ctl.signal.aborted && next < queue.length) await one(queue[next++]); };
+  try{
+    await Promise.all(Array.from({length: Math.min(POOL, queue.length)}, worker));
+    if (ctl.signal.aborted && !stopMsg) stopMsg = "중지했어요.";
   }catch(e){ stopMsg = "예상하지 못한 오류로 멈췄어요("+(e&&e.message||e)+"). 다시 눌러 이어 가세요."; }
   finally{ running=null; queue.forEach(x=>working.delete(x.id)); save(); renderPanel(); }
   const left = s.students.filter(x=>x.essay.trim() && !x.result.trim()).length, notTried = Math.max(0, left - failed);
@@ -2795,7 +2856,6 @@ function openImport(s, init={}){
           const part = src.pages.slice(i,i+chunk);
           results.push(...await ocrChunk(part, ctl.signal, (a,sec,why)=>{ ctx.ocr.msg = why+" — "+sec+"초 뒤 다시"; renderScan(); }));
           ctx.ocr.done += part.length; ctx.ocr.msg=""; renderScan();
-          if (mode==="key" && i+chunk<src.pages.length) await sleep(3000, ctl.signal);
         }
         const g = groupOcr(src, results);
         src.records = g.records.map(r=>({...r, rid:++RID})); src.note = g.note; src.warn=false; src.ocrDone=true; src.ocrErr="";
@@ -3225,7 +3285,7 @@ function applyProv(){
     $("#modeText").textContent=P.label+" API 키로 생성";
     $("#privacyMode").innerHTML = p==="gemini" ? "<b style='display:inline'>무료 Gemini 키</b>로 보낸 내용은 구글이 서비스 개선에 쓰고 사람이 검토할 수도 있어요(구글 약관: 개인정보를 넣지 말 것). 학생 자료에는 결제를 연결한 Gemini 키(가벼운 모델이면 사용료가 아주 적음)나 Claude·OpenAI 유료 키를 권해요." : P.label+" API로 보낸 내용은 기본적으로 모델 학습에 쓰지 않는다고 회사가 밝히고 있어요(발급 사이트 약관에서 확인).";
     $("#limitText").innerHTML = p==="gemini"
-      ? "무료 키는 분당·하루 사용 한도가 있어요. 학생마다 4초씩 쉬고, 한도에 걸리면 20·40·60초 기다렸다가 최대 3번 다시 시도해요(두 번째부터는 다른 flash-lite 모델로 바꿔서). 그래도 안 되면 멈춰요 — 하루 한도는 <b style='display:inline'>한국 시간 오후 4시(겨울 5시)</b>쯤 초기화되고, 다시 누르면 비어 있는 학생만 이어서 만들어요. 학생 한 명에 AI를 보통 2~4번, 많으면 10번 불러요(초안 1 + 고쳐 쓰기 최대 3 + 분량 맞추기 최대 2 + 문제 문장 고치기 최대 2 + 맞춤법 확인 1, AI가 생기부 대신 설명을 돌려주면 다시 요청 1)."
+      ? "무료 키는 분당·하루 사용 한도가 있어요. 요청 사이를 4초씩 띄우고(앞 요청이 오래 걸렸으면 바로 보냄) 학생 두 명씩 함께 만들며, 한도에 걸리면 20·40·60초 기다렸다가 최대 3번 다시 시도해요(두 번째부터는 다른 flash-lite 모델로 바꿔서). 그래도 안 되면 멈춰요 — 하루 한도는 <b style='display:inline'>한국 시간 오후 4시(겨울 5시)</b>쯤 초기화되고, 다시 누르면 비어 있는 학생만 이어서 만들어요. 학생 한 명에 AI를 보통 2~4번, 많으면 10번 불러요(초안 1 + 고쳐 쓰기 최대 3 + 분량 맞추기(모자라면 문장 더하기) 최대 2 + 문제 문장 고치기 최대 2 + 맞춤법 확인 1, AI가 생기부 대신 설명을 돌려주면 다시 요청 1)."
       : P.label+" 키는 <b style='display:inline'>쓴 만큼 요금</b>이 나가요(학생 1명당 모델에 따라 수십~수백 원). 발급 사이트에서 월 사용 한도를 걸어두세요. 잔액이 없으면 생성이 바로 멈추고, 충전 뒤 다시 누르면 비어 있는 학생만 이어서 만들어요.";
   }
 }

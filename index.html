@@ -1923,15 +1923,26 @@ function takeName(rest){
 // 파일·폴더 이름에서 학번·이름 (파일 이름 → 바로 위 폴더 → 그 위 폴더 순)
 function identityFromPath(rel){
   const parts = String(rel||"").split(/[\/\\]/).filter(Boolean);
+  const baseAt = k => k===parts.length-1 ? parts[k].replace(/\.[^.]+$/,"") : parts[k];
   for (let k=parts.length-1; k>=0; k--){
-    const base = k===parts.length-1 ? parts[k].replace(/\.[^.]+$/,"") : parts[k];
-    const id = identityFromName(base);
-    if (id.sid || id.name) return {...id, from: k===parts.length-1 ? "파일 이름" : "폴더 이름"};
+    const id = identityFromName(baseAt(k));
+    if (!(id.sid || id.name)) continue;
+    let {sid, name} = id;
+    // 빠진 것은 바로 옆 칸에서만 채움: 파일 이름에서 찾았으면 그 파일이 든 폴더, 폴더 이름에서 찾았으면 그 안 파일 이름(예: 20302/김하늘.txt · 김하늘/20302.txt).
+    // 폴더 이름을 이름으로 쓰는 건 폴더 이름이 이름 하나뿐이거나 학번이 함께 있을 때만 — 과제 폴더(예: '2차_지시약')를 이름으로 잘못 읽지 않게
+    const j = k===parts.length-1 ? k-1 : k+1;
+    if (j>=0 && j<parts.length && !(sid && name)){
+      const o = identityFromName(baseAt(j)), whole = nameKey(baseAt(j)) === o.name;
+      if (!sid && o.sid) sid = o.sid;
+      if (!name && o.name && (whole || o.sid) && (!o.sid || o.sid===sid)) name = o.name;
+    }
+    return {sid, name, from: k===parts.length-1 ? "파일 이름" : "폴더 이름"};
   }
   return {sid:"", name:"", from:""};
 }
 function identityFromName(base){
-  base = String(base||"").replace(/^(?:IMG|DSC|DSCN|DCIM|PXL|SAM|MVIMG|VID|PANO|Screenshot|스크린샷|화면\s*캡처|KakaoTalk|image|photo|사진)[_\- ]?[\d_\- ]*/i, "");
+  base = String(base||"").replace(/(^|[\s_\-(\[])([가-힣])\s+([가-힣]{2})(?=$|[\s_\-.)\]])/g, "$1$2$3")   // '박 서준' → '박서준'(성과 두 글자 이름 사이 띄움 — '이 글'처럼 한 글자는 붙이지 않음)
+  base = base.replace(/^(?:IMG|DSC|DSCN|DCIM|PXL|SAM|MVIMG|VID|PANO|Screenshot|스크린샷|화면\s*캡처|KakaoTalk|image|photo|사진)[_\- ]?[\d_\- ]*/i, "");
   const toks = base.split(/[\s_+()\[\]{},.·]+|(?<=[가-힣])-|-(?=[가-힣])/).filter(Boolean);
   let sid="", sidIdx=-1;
   const long = base.match(/[1-3]\s*학년\s*\d{1,2}\s*반\s*\d{1,2}\s*번?/) || base.match(/(?<!\d)[1-3]\s*-\s*\d{1,2}\s*-\s*\d{1,2}(?!\d)/);
@@ -2643,21 +2654,33 @@ function groupOcr(src, results){
 
 // ---------- 학번별로 합치고, 탭의 학생과 맞춰 보기 ----------
 let RID=0;
+// 이름 견주기: 띄어쓰기를 빼고('박 서준' = '박서준')
+const nameKey = n => String(n||"").replace(/\s+/g,"");
+// 여러 파일·폴더의 자료를 학생별로 묶음. 먼저 학번·이름이 함께 있는 자료로 '이름 → 학번'을 알아 두고(같은 이름이 학번 하나에만 있을 때),
+// 학번 없이 이름만 있는 자료(파일·폴더 이름에서 짐작한 이름 포함)도 그 학번 묶음에 넣는다 — 자료 차례(폴더 차례)대로 글을 이음
 function mergeRecords(raws){
+  const nameSids = new Map();
+  for (const r of raws){
+    const sid = r.sid ? sidOf(r.sid) : "", k = nameKey(r.name);
+    if (sid && k){ if (!nameSids.has(k)) nameSids.set(k, new Set()); nameSids.get(k).add(sid); }
+  }
   const groups=[], byKey=new Map();
   for (const r of raws){
-    const sid = r.sid ? sidOf(r.sid) : "";
-    const key = sid ? "s:"+sid : (r.name && !r.nameGuess ? "n:"+r.name : "r:"+r.rid);
+    let sid = r.sid ? sidOf(r.sid) : "", viaName = false;
+    const k = nameKey(r.name);
+    if (!sid && k && nameSids.has(k) && nameSids.get(k).size===1){ sid = [...nameSids.get(k)][0]; viaName = true; }
+    const key = sid ? "s:"+sid : (k ? "n:"+k : "r:"+r.rid);
     let m = byKey.get(key);
     if (!m){ m = {key, sid, name:"", essay:"", result:"", tier:"", level:"", preset:"", srcs:[], rids:[], flags:[], thumbs:[], nameGuess:false, ocr:false, dup:0}; byKey.set(key,m); groups.push(m); }
     m.rids.push(r.rid); m.dup++;
     if (r.src && !m.srcs.includes(r.src)) m.srcs.push(r.src);
     if (r.name){
-      if (!m.name){ m.name=r.name; m.nameGuess=!!r.nameGuess; }
-      else if (m.name!==r.name){
+      if (!m.name){ m.name=r.name; m.nameGuess=!!r.nameGuess && !viaName; }
+      else if (nameKey(m.name)!==k){
         if (m.nameGuess && !r.nameGuess){ m.name=r.name; m.nameGuess=false; }
-        else if (!r.nameGuess && !m.nameGuess) m.flags.push("이름이 둘: "+m.name+" / "+r.name);
-      }
+        else if (!r.nameGuess && !m.nameGuess){ const f="이름이 둘: "+m.name+" / "+r.name; if (!m.flags.includes(f)) m.flags.push(f); }
+      } else if (/\s/.test(m.name) && !/\s/.test(r.name)) m.name = r.name;   // 띄어 쓴 이름보다 붙여 쓴 이름으로
+      if (m.nameGuess && viaName) m.nameGuess = false;
     }
     if (r.essay && !m.essay.includes(r.essay)) m.essay = m.essay ? m.essay+"\n"+r.essay : r.essay;
     if (r.result && !m.result) m.result=r.result;
@@ -2668,17 +2691,13 @@ function mergeRecords(raws){
     (r.flags||[]).forEach(f=>{ if (!m.flags.includes(f)) m.flags.push(f); });
     (r.thumbs||[]).forEach(t=>m.thumbs.push(t));
   }
-  // 학번 없이 이름만 있는 묶음은, 같은 이름의 학번 묶음이 하나뿐이면 거기에 합친다
-  for (const m of groups.filter(x=>x.key.startsWith("n:"))){
-    const into = groups.filter(x=>x.sid && x.name===m.name);
-    if (into.length===1){ const t=into[0]; t.rids.push(...m.rids); t.dup+=m.dup; m.srcs.forEach(s=>{ if(!t.srcs.includes(s)) t.srcs.push(s); }); if (m.essay && !t.essay.includes(m.essay)) t.essay = t.essay? t.essay+"\n"+m.essay : m.essay; m.thumbs.forEach(x=>t.thumbs.push(x)); m.gone=true; }
-  }
-  return groups.filter(x=>!x.gone);
+  for (const m of groups) if (m.name) m.name = m.name.replace(/\s+/g,"");
+  return groups;
 }
 function matchTarget(s, m){
   if (m.sid){ const t = s.students.find(x=>sameSid(x.sid, m.sid)); if (t) return {t}; }
   if (m.name){
-    const same = s.students.filter(x=>x.name && x.name===m.name && (!m.sid || !x.sid));
+    const same = s.students.filter(x=>x.name && nameKey(x.name)===nameKey(m.name) && (!m.sid || !x.sid));
     if (same.length===1) return {t:same[0]};
     if (m.ocr || m.nameGuess){
       const near = s.students.filter(x=>x.name && x.name.length>=2 && lev1(x.name, m.name) && (!m.sid || !x.sid));

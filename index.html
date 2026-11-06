@@ -341,6 +341,7 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
   <div class="foot">
     <p style="margin:0">작성 내용은 이 브라우저에만 저장됩니다 · 다른 기기로 옮길 때는 <b>엑셀용 전체 복사</b> → 엑셀에 붙여넣어 저장한 뒤, 같은 항목으로 새 탭을 만들어 그 파일을 <b>자료 불러오기</b>로 넣으면 학생·소감문·결과가 옮겨져요(탭 설정·고친 지침은 빼고) · 껐다 켜면 지워지는 학교 PC라면 저장한 파일을 USB·클라우드에 두세요</p>
     <span id="standaloneRow" hidden><button class="sm" id="getStandalone">공유용 HTML 받기 (API 키 입력판)</button> <span class="hint">다른 선생님께 드릴 때 — 받은 분이 API 키를 넣어 써요</span></span>
+    <span id="xlsmRow"><button class="sm" id="getXlsm">엑셀판 받기 (.xlsm)</button> <span class="hint" id="xlsmHint">엑셀(윈도우)에서 쓰는 판 — 받은 파일은 오른쪽 클릭 → 속성 → ‘차단 해제’ 뒤 열고 ‘콘텐츠 사용’</span></span>
     <span class="hint" id="appVer"></span>
   </div>
 </div>
@@ -625,6 +626,32 @@ function sentencesOf(text){
   return String(text||"").split("\n").flatMap(p=>p.split(/(?<=[.!?])\s+/)).map(x=>x.trim()).filter(x=>x.replace(/[\s.!?]/g,"").length>1);
 }
 function countMatches(text, re){ re.lastIndex=0; const m=text.match(re); return m ? m.length : 0; }
+// ---------- 비슷한 글 점검(2026-11-06 사용자 — 같은 지침·같은 동사로 한 반 글이 판박이가 되지 않게) ----------
+// 같은 탭의 다른 학생 글에 거의 같은 문장이 있으면 노란 칩. 문장을 낱말로 나눠 낱말마다 앞 두 글자(조사·어미가 달라도 같게)만 모아
+// 두 문장의 겹침(2×같은 수 ÷ 두 수의 합)이 SIM_DICE 이상이면 비슷함. 낱말이 SIM_MIN_WORDS 개 미만인 짧은 문장은 안 봄. 엑셀 modText SimilarOf 와 같은 규칙
+const SIM_MIN_WORDS = 5, SIM_DICE = 0.7;
+const SIM_CACHE = new Map();
+function simToks(sent){
+  let v = SIM_CACHE.get(sent); if (v) return v;
+  v = new Set();
+  for (const w of String(sent).split(/\s+/)){ const x = w.replace(/[^가-힣A-Za-z0-9]/g,"").toLowerCase(); if (x) v.add(x.slice(0,2)); }
+  if (SIM_CACHE.size > 5000) SIM_CACHE.clear();
+  SIM_CACHE.set(sent, v); return v;
+}
+function simDice(a, b){ if (!a.size || !b.size) return 0; const [x,y] = a.size<=b.size ? [a,b] : [b,a]; let n = 0; for (const t of x) if (y.has(t)) n++; return 2*n/(a.size+b.size); }
+// sents(문장 배열) 가운데 others({who, text}) 의 어느 문장과 비슷한 것: [{i, who:[이름…]}]
+function similarIn(sents, others){
+  const out = []; if (!others || !others.length) return out;
+  const os = others.map(o=>({who:o.who, toks:sentencesOf(o.text).map(simToks).filter(t=>t.size>=SIM_MIN_WORDS)})).filter(o=>o.toks.length);
+  if (!os.length) return out;
+  sents.forEach((s,i)=>{ const a = simToks(s); if (a.size < SIM_MIN_WORDS) return;
+    const who = []; for (const o of os) if (!who.includes(o.who) && o.toks.some(b=>simDice(a,b) >= SIM_DICE)) who.push(o.who);
+    if (who.length) out.push({i, who}); });
+  return out;
+}
+const simWho = who => who.length>2 ? who.slice(0,2).join("·")+" 외 "+(who.length-2)+"명" : who.join("·");
+// 같은 탭의 다른 학생 글(결과가 있는 학생만): 점검·문장 고치기에 넘김. 이름은 화면 칩에만 쓰고 AI 에는 보내지 않음
+function othersOf(s, stu){ return s.students.filter(x=>x!==stu && x.id!==stu.id && String(x.result||"").trim()).map(x=>({who:String(x.name||"").trim()||"이름 없는 학생", text:x.result})); }
 function auditDraft(text, ctx={}){
   const t = String(text||"").trim();
   const issues=[];
@@ -677,6 +704,10 @@ function auditDraft(text, ctx={}){
     const titles = [...t.matchAll(/[『《「<]([^』》」>\n]{2,40})[』》」>]/g)].map(m=>m[1]).filter(x=>!squash(essay).includes(squash(x)));
     if (titles.length) add("soft", "소감문에 없는 제목 "+titles.slice(0,2).map(x=>"「"+x+"」").join(" "), "소감문에 없는 도서·자료 제목("+titles.join(", ")+")을 뺄 것.", "titles");
   }
+  // 같은 탭 다른 학생 글과 거의 같은 문장(ctx.others 를 준 곳에서만). 고칠 말(AI 에 가는 글)에는 다른 학생 이름을 넣지 않음
+  const sim = similarIn(sents, ctx.others);
+  if (sim.length){ const who = [...new Set(sim.flatMap(x=>x.who))];
+    add("style", "다른 학생과 비슷한 문장 "+sim.length+"개("+simWho(who)+")", "같은 탭의 다른 학생 "+who.length+"명의 글과 거의 같은 문장이 "+sim.length+"개 있음. 뜻과 사실은 그대로 두고, 이 학생 소감문에 나온 구체적인 장면·자료·표현으로 바꿔 써서 다른 학생 글과 겹치지 않게 할 것.", "similar"); }
   return issues;
 }
 const issueWeight = i => i.kind==="refuse" ? 100 : i.level==="must" ? 10 : i.level==="soft" ? 4 : 3;   // 거절·설명문은 어떤 초안보다도 나쁘게
@@ -714,7 +745,7 @@ function thinWarn(s, stu){
 }
 // 카드·내보내기·출력에서 쓰는 점검: 탭의 문단 수와 학생의 분량 목표까지
 function lenBand(s, stu){ const max=catOf(s.cat).max, target=tierTarget(s,stu); return {target, minB:Math.round(target*LEN_LO), cap:Math.min(max, Math.round(target*LEN_HI))}; }
-function auditFor(s, stu){ return auditDraft(stu.result, Object.assign({name:stu.name, essay:stu.essay, paras:parasFor(s, stu)}, lenBand(s, stu))); }
+function auditFor(s, stu){ return auditDraft(stu.result, Object.assign({name:stu.name, essay:stu.essay, paras:parasFor(s, stu), others:othersOf(s, stu)}, lenBand(s, stu))); }
 
 // ---------- AI 연결 ----------
 let mode = "none";               // "claude" | "key" | "none"
@@ -896,7 +927,7 @@ function genContext(subj, stu){
     + (thin ? " "+thinFill(subj.cat) : "") + " 분량을 채우려고 새 사실·장면을 만들거나 평가·꾸밈말을 부풀리지 마세요.";
   const system = baseText + "\n\n" + variety + (levelText ? "\n\n" + levelText : "") + "\n\n" + lengthRule + (paras===1 ? "\n\n" + PARA_ONE : "");
   return {max, target, minB, cap, minC, maxC, sentences, paras, thin, cat: subj.cat, base: baseText, variety, level, levelText, lengthRule, system, presetKey: usePreset ? "p:"+stu.preset : "tab",
-    essay: maskEssay(stu.essay, stu), rawEssay: stu.essay, name: stu.name};
+    essay: maskEssay(stu.essay, stu), rawEssay: stu.essay, name: stu.name, others: othersOf(subj, stu)};
 }
 function checklist(ctx){
   return "[내기 전 마지막 확인 - 하나라도 어기면 고쳐서 출력]\n"
@@ -913,7 +944,7 @@ function firstAsk(ctx){
 }
 function assess(text, ctx){
   const bytes = neisBytes(text);
-  const issues = auditDraft(text, {name:ctx.name, essay:ctx.rawEssay, paras:ctx.paras, target:ctx.target, minB:ctx.minB, cap:ctx.cap});
+  const issues = auditDraft(text, {name:ctx.name, essay:ctx.rawEssay, paras:ctx.paras, target:ctx.target, minB:ctx.minB, cap:ctx.cap, others:ctx.others});
   return {bytes, issues, short: bytes<ctx.minB, long: bytes>ctx.cap};
 }
 function scoreOf(st, ctx){
@@ -954,7 +985,7 @@ const joinParas = ps => ps.map(p=>p.join(" ")).join("\n");
 const finalWord = s => { const w = String(s).replace(/[.!?\s]+$/,"").split(/\s+/).pop()||""; return w.length>=2 ? w : ""; };
 const OTHER_ENDS = "~임/~됨/~보임/~드러남/~나타남/~엿보임/~두드러짐/~지님/~갖춤";
 // 문제 종류 → 고칠 문장 번호와 문장마다의 고칠 점. 문장으로 집을 수 없는 것(분량·문단·기호)은 넣지 않는다
-const SENTENCE_KINDS = ["end3","ham","dup","starts","cliche","flat","banword","banpred","negmust","negsoft","content","name","digits","titles"];
+const SENTENCE_KINDS = ["end3","ham","dup","starts","cliche","flat","banword","banpred","negmust","negsoft","content","name","digits","titles","similar"];
 function sentenceTargets(text, issues, ctx){
   const flat = splitParas(text).flat(), n = flat.length, T = new Map();
   const add = (i, msg) => { if (i<0 || i>=n) return; if (!T.has(i)) T.set(i, []); if (!T.get(i).includes(msg)) T.get(i).push(msg); };
@@ -980,6 +1011,7 @@ function sentenceTargets(text, issues, ctx){
     else if (kind==="name"){ const nm = String(ctx.name||"").trim(); flat.forEach((s,i)=>{ if ((nm.length>=2 && s.includes(nm)) || s.includes("○○")) add(i, "학생 이름(또는 ○○)을 빼고 주어 없이 쓸 것"); }); }
     else if (kind==="digits" && essay){ const have = new Set(nums(essay)); flat.forEach((s,i)=>{ const ex = nums(s).filter(x=>!have.has(x)); if (ex.length) add(i, "소감문에 없는 숫자("+ex.join(", ")+")를 빼고 숫자 없이 쓸 것"); }); }
     else if (kind==="titles" && essay) flat.forEach((s,i)=>{ const ts = [...s.matchAll(/[『《「<]([^』》」>\n]{2,40})[』》」>]/g)].map(m=>m[1]).filter(x=>!squash(essay).includes(squash(x))); if (ts.length) add(i, "소감문에 없는 제목("+ts.join(", ")+")을 빼고 쓸 것"); });
+    else if (kind==="similar") similarIn(flat, ctx.others).forEach(x=>add(x.i, "같은 탭의 다른 학생 글에 거의 같은 문장이 있으니, 뜻과 사실은 그대로 두고 이 학생 소감문에 나온 구체적인 장면·자료·표현으로 바꿔 쓸 것(흔한 평가 문구를 그대로 쓰지 말 것)"));
   }
   return {flat, T};
 }
@@ -1462,7 +1494,8 @@ function renderPanel(){
       el("button",{onclick:()=>exportXlsx(s), disabled:!s.students.some(x=>x.result.trim()), title:"나이스에서 내려받는 그 항목 엑셀 양식과 같은 칸(학년도·학년·반·번호·성명·특기사항 등)으로 생기부 문장을 내보내요"},"나이스 형식 엑셀로 내보내기"),
       el("button",{onclick:()=>openPrint(s), disabled:!s.students.length, title:"학번·이름·소감문·생기부 문장 표를 가로 A4로 바로 출력하거나 PDF로 저장해요"},"출력하기"),
       el("button",{onclick:()=>copyAll(s), disabled:!s.students.length, title:"학번·이름·분량·수준·지침 유형·소감문·생기부 문장을 복사해요. 엑셀에 붙여넣어 저장해 두면 다른 기기에서 자료 불러오기로 옮길 수 있어요"},"엑셀용 전체 복사"),
-      foldAll
+      foldAll,
+      el("button",{onclick:()=>openEssayQs(s), title:"학생에게 나눠 줄 소감문 질문(왜 궁금했나 → 무엇을 했나 → 무엇을 정리했나 → 더 생각한 것)을 복사하거나 인쇄용 파일로 받아요"},"소감문 질문지")
     ),
     el("div",{class:"row"}, stopBtn,
       el("button",{id:"regenChecked",disabled: mode==="none" || !!running || !nChecked, onclick:()=>confirmBox("체크한 학생 "+s.students.filter(x=>x.checked&&x.essay.trim()).length+"명의 결과를 다시 만들어요. 지금 결과는 바뀝니다.","다시 생성",()=>generateAll(s,true))},
@@ -1483,7 +1516,7 @@ function renderPanel(){
 
   const list = el("div",{class:"students",style:"margin-top:10px"});
   if (!s.students.length){
-    list.append(el("div",{class:"empty-state"},"아직 학생이 없어요. 소감문 ",el("b",{},"파일·폴더를 이 화면에 끌어다 놓거나, 파일을 복사해 Ctrl+V")," 하면 학번별로 나눠 보여줘요. ",el("b",{},"자료 불러오기"),"나 ",el("b",{},"+ 학생 추가"),"도 돼요."));
+    list.append(el("div",{class:"empty-state"},"아직 학생이 없어요. 소감문 ",el("b",{},"파일·폴더를 이 화면에 끌어다 놓거나, 파일을 복사해 Ctrl+V")," 하면 학번별로 나눠 보여줘요. ",el("b",{},"자료 불러오기"),"나 ",el("b",{},"+ 학생 추가"),"도 돼요. 소감문을 아직 안 받았다면 ",el("b",{},"소감문 질문지"),"로 질문을 나눠 주세요(질문대로 쓴 소감문이면 지어낸 내용 없이 더 정확한 글이 나와요)."));
   }
   s.students.forEach((stu,i)=>list.append(studentCard(s,stu,i)));
   p.append(list);
@@ -1821,6 +1854,8 @@ async function generateAll(s, onlyChecked){
   if (left && !onlyChecked) msg += " 다시 ‘생기부 생성’을 누르면 결과가 빈 학생"+(failed?"(실패한 학생 포함)":"")+"만 이어서 만들어요.";
   else msg += " AI 초안이니 꼭 확인하고 고쳐서 나이스에 입력하세요.";
   if (flagged) msg += " 빨간 ‘확인할 것’이 남은 학생 "+flagged+"명은 직접 고쳐 주세요.";
+  const simN = s.students.filter(x=>x.result.trim() && auditFor(s, x).some(i=>i.kind==="similar")).length;
+  if (simN) msg += " 다른 학생 글과 비슷한 문장이 있는 학생 "+simN+"명은 카드의 ‘다른 학생과 비슷한 문장’ 칩을 눌러 바꿔 쓸 수 있어요.";
   setStatus(msg, failed||stopMsg ? "bad":"good");
 }
 
@@ -3306,6 +3341,59 @@ function copyText(t, btn, okMsg){
   try{ navigator.clipboard.writeText(t).then(done, fallback); }catch(e){ fallback(); }
 }
 
+// ---------- 소감문 질문지(2026-11-06 사용자 — 합격생 세특 분석의 ‘계기 → 한 일 → 정리 → 넓힘’을 소감문에서부터 받기) ----------
+// 이 네 물음으로 받은 소감문이면 AI 가 빈 단계를 채우려고 지어낼 일이 줄어듦. 항목(세특·자율·동아리·진로·행특)마다 질문 4개 + 공통 안내.
+// 엑셀판 학생 탭 [소감문 질문지] 단추와 같은 글(엑셀판 build.py 가 지침 시트 '질문지' 줄로 넣음)
+const ESSAY_QS = {"세특":{"title":"수업 활동 돌아보기","qs":[["무엇이 궁금했나요?","이 활동(단원)에서 처음 궁금했던 점이나 주제를 고른 까닭을 적어 주세요. 읽은 책·기사가 계기라면 제목도 적어 주세요."],["궁금한 것을 풀려고 직접 무엇을 했나요?","한 일을 순서대로 적어 주세요. 찾아본 자료, 실험·계산·비교한 방법, 모둠에서 내가 맡은 부분 등."],["알아낸 것을 어떻게 정리하고 나눴나요?","결과(측정값·그래프·결론)와 그렇게 판단한 근거, 보고서·발표·만든 것을 적어 주세요."],["해 보고 나서 더 생각한 것은 무엇인가요?","아쉬웠던 점·오차와 고칠 방법, 배운 개념을 다른 과목이나 생활 문제에 이어 본 것, 더 알아보고 싶은 질문을 적어 주세요."]]},"자율":{"title":"자율·자치활동 돌아보기","qs":[["어떤 활동에서 무슨 역할을 맡았나요?","맡은 역할이나 고른 주제, 그 일을 하게 된 까닭을 적어 주세요."],["직접 한 일은 무엇인가요?","준비부터 마무리까지 내가 한 일을 순서대로, 어려웠던 점과 해결한 방법도 함께 적어 주세요."],["결과는 어땠나요?","활동 결과와 학급·학교에 생긴 변화, 친구들과 함께 정한 것을 적어 주세요."],["이 경험으로 무엇이 달라졌나요?","나의 태도·습관이 달라진 점과 다음에 더 해 보고 싶은 것을 적어 주세요."]]},"동아리":{"title":"동아리 활동 돌아보기","qs":[["이번 활동의 주제와 내 역할은 무엇이었나요?","주제를 고른 까닭이나 처음 궁금했던 점도 적어 주세요."],["직접 한 일은 무엇인가요?","조사·실험·제작·운영 등 한 일을 순서대로, 친구들과 나눈 일과 내가 맡은 부분을 나눠 적어 주세요."],["무엇을 만들거나 발표했나요?","결과물(발표·보고서·작품)과 그 과정에서 알아낸 점, 그 근거를 적어 주세요."],["다음에는 무엇을 이어 가고 싶나요?","아쉬웠던 점과 고칠 방법, 관심 분야와 이어서 더 해 보고 싶은 것을 적어 주세요."]]},"진로":{"title":"진로활동 돌아보기","qs":[["어떤 진로 활동에 참여했고, 무엇이 궁금했나요?","참여한 활동(탐색·체험·상담·특강 등)과 참여하기 전에 궁금했던 점을 적어 주세요."],["직접 찾아보거나 해 본 것은 무엇인가요?","알아본 정보, 직접 해 본 활동, 그 과정에서 던진 질문을 적어 주세요."],["진로 생각이 어떻게 달라졌나요?","활동 전과 비교해 더 분명해지거나 바뀐 점과 그 까닭을 적어 주세요."],["학교에서 앞으로 무엇을 해 볼 건가요?","과목 공부·동아리·독서 등 학교 안에서 이어 갈 계획을 구체적으로 적어 주세요."]]},"행특":{"title":"학교생활 돌아보기","qs":[["이번 학기에 가장 꾸준히 한 일은 무엇인가요?","공부·맡은 역할·습관 등 꾸준히 한 일과 그렇게 한 까닭을 적어 주세요."],["친구나 학급을 위해 한 일이 있나요?","도와주거나 함께한 장면을 한두 개 구체적으로 적어 주세요(친구 이름은 빼고)."],["스스로 달라진 점은 무엇인가요?","학기 처음과 비교해 나아진 태도·습관을, 그렇게 볼 수 있는 장면과 함께 적어 주세요."],["다음 학기 목표는 무엇인가요?","목표와 그것을 이루려고 할 일을 적어 주세요."]]},"공통":["있었던 일만 구체적으로 적어 주세요. 질문마다 3~5줄이면 충분해요.","숫자(측정값 등)는 실제 값만 적고, 읽은 책·자료는 제목을 적어 주세요.","학원·과외, 학교 밖 대회·수상, 자격증·어학 시험, 대학·기관 이름은 생기부에 쓸 수 없으니 적지 마세요."]};
+function essayQsOf(cat){ return ESSAY_QS[cat] || ESSAY_QS["세특"]; }
+function essayQsText(cat, topic){
+  const q = essayQsOf(cat);
+  return "["+q.title+(topic ? " — "+topic : "")+"]\n" + q.qs.map(([t,h],i)=>(i+1)+". "+t+"\n   ("+h+")").join("\n") + "\n\n" + ESSAY_QS["공통"].map(x=>"※ "+x).join("\n");
+}
+function essayQsHTML(cat, topic){
+  const q = essayQsOf(cat);
+  return '<div class="qs"><h1>'+htmlEsc(q.title)+'</h1>'+(topic ? '<div class="qs-topic">'+htmlEsc(topic)+'</div>' : '')
+    + '<table class="qs-id"><tr><th>학번</th><td></td><th>이름</th><td></td></tr></table>'
+    + q.qs.map(([t,h],i)=>'<div class="qs-q"><div class="qs-t">'+(i+1)+'. '+htmlEsc(t)+'</div><div class="qs-h">'+htmlEsc(h)+'</div><div class="qs-box"></div></div>').join("")
+    + '<ul class="qs-foot">'+ESSAY_QS["공통"].map(x=>'<li>'+htmlEsc(x)+'</li>').join("")+'</ul></div>';
+}
+const QS_CSS = "body{margin:0;padding:12mm;font-family:'맑은 고딕','Malgun Gothic',sans-serif;color:#222}@page{size:A4 portrait;margin:12mm}@media print{body{padding:0}}"
+  + ".qs h1{font-size:19pt;margin:0 0 1mm}.qs-topic{font-size:12pt;color:#555;margin-bottom:3mm}"
+  + ".qs-id{border-collapse:collapse;width:100%;margin:2mm 0 4mm}.qs-id th,.qs-id td{border:1px solid #888;padding:2.5mm;font-size:11pt}.qs-id th{width:14%;background:#f1f0ea}.qs-id td{width:36%}"
+  + ".qs-q{margin-bottom:3.5mm;break-inside:avoid}.qs-t{font-size:12.5pt;font-weight:700}.qs-h{font-size:9.5pt;color:#555;margin:1mm 0 1.5mm}"
+  + ".qs-box{border:1px solid #888;border-radius:2mm;height:38mm}.qs-foot{font-size:9pt;color:#555;margin:2mm 0 0;padding-left:5mm}";
+function openEssayQs(s){
+  const cat = s.cat, q = essayQsOf(cat);
+  const topicIn = el("input",{type:"text", id:"qsTopic", value:String((s.cat==="세특" ? (s.subjName||s.name) : s.name)||""), placeholder:"예: 통합과학2 산과 염기 실험"});
+  setModalWide(false);
+  showModal(el("h2",{text:"소감문 질문지 — "+q.title}),
+    el("p",{class:"hint",style:"margin:0"},"이 네 물음으로 소감문을 받으면 생기부에 쓸 ‘계기 → 한 일 → 정리 → 넓힘’이 소감문에 다 들어 있어서, AI가 빈 곳을 지어낼 일이 줄고 학생마다 다른 글이 나와요. 리로스쿨·구글 설문 같은 곳에 질문을 붙여넣거나, 인쇄해서 나눠 주세요."),
+    el("label",{class:"f"},"활동 이름(질문지 맨 위에 적혀요)", topicIn),
+    el("ol",{class:"qs-list",style:"margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"}, ...q.qs.map(([t,h])=>el("li",{}, el("b",{text:t}), el("div",{class:"hint",text:h})))),
+    el("ul",{class:"hint",style:"margin:0;padding-left:18px"}, ...ESSAY_QS["공통"].map(x=>el("li",{text:x}))),
+    el("div",{class:"row",style:"justify-content:flex-end"},
+      el("button",{onclick:closeModal},"닫기"),
+      el("button",{id:"qsCopy",onclick:e=>copyText(essayQsText(cat, topicIn.value.trim()), e.currentTarget, "질문을 복사했어요. 리로스쿨·설문 안내 칸에 붙여넣으세요.")},"질문 복사"),
+      el("button",{class:"primary",id:"qsFile",onclick:()=>{ const topic = topicIn.value.trim(); closeModal(); saveQsFile(s, cat, topic); }},"인쇄용 파일로 받기")));
+}
+async function saveQsFile(s, cat, topic){
+  const T = n => "<"+n+">";   // 문서 껍데기 태그는 나눠 씀(build.py 가 원본 속 껍데기 태그를 막음)
+  const doc = T("!DOCTYPE html")+T('html lang="ko"')+T("head")+'<meta charset="utf-8"><title>'+htmlEsc(essayQsOf(cat).title)+'</title><style>'+QS_CSS+'</style>'+T("/head")+T("body")+essayQsHTML(cat, topic)
+    + '<scr'+'ipt>addEventListener("load",function(){setTimeout(function(){window.print();},300);});<\/scr'+'ipt>'+T("/body")+T("/html");
+  const fname = "소감문_질문지_"+String(topic||s.name||catOf(cat).label).replace(/[\\/:*?"<>|]/g,"_")+".html";
+  const data = new TextEncoder().encode(doc);
+  if (downloadsApi){
+    try{ await downloadsApi.save({filename:fname, data}); setStatus("소감문 질문지를 저장했어요. 파일을 열면 출력 창이 떠요(세로 A4 한 장).","good"); }
+    catch(e){ if (e.code!=="declined") setStatus("파일 저장을 할 수 없어요.","bad"); }
+    return;
+  }
+  try{
+    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type:"text/html"})); a.download=fname;
+    document.body.append(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},1000);
+    setStatus("소감문 질문지를 내려받았어요. 파일을 열면 출력 창이 떠요(세로 A4 한 장).","good");
+  }catch(e){ setStatus("이 화면에서는 파일 저장이 막혀 있어요.","bad"); }
+}
+
 // ---------- 새 탭 ----------
 function openNewTab(after){
   let pick="세특", touched=false;
@@ -3446,6 +3534,27 @@ $("#getStandalone").addEventListener("click", async ()=>{
     await downloadsApi.save({filename:"생기부_자동_생성기_공유용.html", data: await r.text()});
   }catch(e){ if (e && e.code!=="declined") setStatus("파일을 받지 못했어요. 잠시 뒤 다시 눌러 주세요.","bad"); }
   finally{ b.disabled=false; }
+});
+
+// 엑셀판 받기(2026-11-06 사용자 '웹에서 엑셀버전 다운 받을 수 있는 단추'): 링크판 저장소(ungcheon-tools/saenggibu)에 build.py 가 올려 두는 배포용 엑셀판
+const XLSM_NAME = "생기부_자동_생성기_엑셀판.xlsm", XLSM_URL = "https://ungcheon-tools.github.io/saenggibu/" + encodeURIComponent(XLSM_NAME);
+$("#getXlsm").addEventListener("click", async ()=>{
+  const b = $("#getXlsm"), h = $("#xlsmHint");
+  const tell = (msg, cls) => { h.textContent = msg; h.className = "hint" + (cls==="bad" ? " red" : ""); setStatus(msg, cls); };
+  const after = "받은 파일은 오른쪽 클릭 → 속성 → ‘차단 해제’ 뒤 열고, 위쪽 노란 막대의 ‘콘텐츠 사용’을 누르세요(윈도우용 엑셀).";
+  if (downloadsApi){   // Claude 화면 안: 링크 내려받기가 막혀 있어 받아서 저장
+    try{
+      b.disabled = true;
+      const r = await fetch(XLSM_URL); if (!r.ok) throw new Error("fetch");
+      await downloadsApi.save({filename: XLSM_NAME, data: new Uint8Array(await r.arrayBuffer())});
+      tell("엑셀판을 저장했어요. " + after, "good");
+    }catch(e){ if (!(e && e.code==="declined")) tell("이 화면에서는 엑셀판을 받지 못했어요. 인터넷 창에서 https://ungcheon-tools.github.io/saenggibu/ 를 열어 맨 아래 ‘엑셀판 받기’를 누르세요.", "bad"); }
+    finally{ b.disabled = false; }
+    return;
+  }
+  const a = document.createElement("a"); a.href = XLSM_URL; a.download = XLSM_NAME; a.rel = "noopener";
+  document.body.append(a); a.click(); setTimeout(()=>a.remove(), 1000);
+  tell("엑셀판을 내려받아요. " + after, "good");
 });
 
 // ---------- 시작 ----------

@@ -216,6 +216,12 @@ button.chk-chip.fixing{opacity:1;border-style:dashed;border-color:currentColor}
 .chip{border-radius:999px;padding:6px 12px}
 .chip small{color:var(--muted);font-weight:500}
 .chip.on{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.eg-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:760px){.eg-grid{grid-template-columns:1fr}}
+.eg-card{border:1px solid var(--line);border-radius:10px;padding:10px 14px;background:var(--surface)}
+.eg-card.good{border-color:var(--accent);background:var(--accent-soft)}
+.eg-card.weak{border-color:var(--warn);background:var(--warn-soft)}
+.eg-card h4{margin:0 0 6px;font-size:1rem}
 .chip.on small{color:inherit;opacity:.8}
 .preset-wrap{margin-top:14px;display:flex;flex-direction:column;gap:6px}
 .subj-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr) minmax(0,1.6fr);gap:12px;align-items:end;margin-top:12px}
@@ -1402,7 +1408,9 @@ function renderPanel(){
         el("li",{},el("b",{},"탭 만들기")," — 탭 이름을 적고 생기부 항목(세특·자율·동아리·진로·행특)을 고르면 끝"),
         el("li",{},el("b",{},"학생 넣기")," — 소감문 파일·폴더를 끌어다 놓거나, 파일을 복사해 붙여넣기(Ctrl+V). 학번별로 알아서 나눠요"),
         el("li",{},el("b",{},"생기부 생성")," — 노란 단추 한 번이면 모든 학생 초안 완성")),
-      el("div",{},el("button",{class:"hl",onclick:()=>openNewTab(), style:"padding:10px 18px;font-size:.95rem"},"+ 첫 탭 만들기"))));
+      el("div",{class:"row",style:"gap:10px;flex-wrap:wrap"},
+        el("button",{class:"hl",onclick:()=>openNewTab(), style:"padding:10px 18px;font-size:.95rem"},"+ 첫 탭 만들기"),
+        el("button",{id:"essayGuideBtn",onclick:()=>openEssayGuide({}), style:"padding:10px 18px;font-size:.95rem", title:"소감문을 어떤 질문으로 받으면 좋은지 항목별 질문과 예시를 보여 줘요"},"소감문(질문) 작성하기"))));
     return;
   }
   const max = catOf(s.cat).max;
@@ -3392,20 +3400,48 @@ const QS_CSS = "body{margin:0;padding:12mm;font-family:'맑은 고딕','Malgun G
   + ".qs-id{border-collapse:collapse;width:100%;margin:2mm 0 4mm}.qs-id th,.qs-id td{border:1px solid #888;padding:2.5mm;font-size:11pt}.qs-id th{width:14%;background:#f1f0ea}.qs-id td{width:36%}"
   + ".qs-q{margin-bottom:3.5mm;break-inside:avoid}.qs-t{font-size:12.5pt;font-weight:700}.qs-h{font-size:9.5pt;color:#555;margin:1mm 0 1.5mm}"
   + ".qs-box{border:1px solid #888;border-radius:2mm;height:38mm}.qs-foot{font-size:9pt;color:#555;margin:2mm 0 0;padding-left:5mm}";
-function openEssayQs(s){
-  const cat = s.cat, q = essayQsOf(cat);
-  const topicIn = el("input",{type:"text", id:"qsTopic", value:String((s.cat==="세특" ? (s.subjName||s.name) : s.name)||""), placeholder:"예: 통합과학2 산과 염기 실험"});
-  setModalWide(false);
-  showModal(el("h2",{text:"소감문 질문지 — "+q.title}),
-    el("p",{class:"hint",style:"margin:0"},"이 네 물음으로 소감문을 받으면 생기부에 쓸 ‘계기 → 한 일 → 정리 → 넓힘’이 소감문에 다 들어 있어서, AI가 빈 곳을 지어낼 일이 줄고 학생마다 다른 글이 나와요. 리로스쿨·구글 설문 같은 곳에 질문을 붙여넣거나, 인쇄해서 나눠 주세요."),
+// 소감문(질문) 작성하기(2026-11-06 사용자 '노란색 첫 탭 만들기 옆에 소감문(질문) 작성하기를 만들어서 예시와 함께 어떻게 만드는게 좋은지'):
+// 항목을 고르면 좋은 질문 만드는 법 · 질문 4개 · 좋은 답 예시(질문 번호에 맞춘 네 단락)와 아쉬운 답 예시를 보여 줌. 예시 학생·활동은 지어낸 것
+const ESSAY_TIPS = ["한 질문에 한 가지만 물어요 — 왜 궁금했나 / 무엇을 했나 / 무엇을 정리했나 / 더 생각한 것.","‘느낀 점’보다 ‘무엇을 했나’를 물어요. 행동과 장면이 남아야 생기부 문장이 돼요.","내가 맡은 일, 횟수·측정값, 결과처럼 확인할 수 있는 것을 적게 해요(숫자는 실제 값만).","아쉬운 점과 다음에 해 볼 것을 꼭 물어요. 생기부의 ‘넓힘’ 단계가 여기서 나와요.","질문지 맨 위에 활동 이름(과목·단원·활동)을 적어요. 학생이 어떤 활동인지 헷갈리지 않아요.","질문마다 3~5줄이면 충분하다고 알려 줘요. 너무 길게 쓰라고 하면 꾸민 말이 늘어요.","학원·학교 밖 대회·수상·자격증·대학 이름은 생기부에 쓸 수 없으니 적지 말라고 안내해요."];
+const ESSAY_EX = {"세특":{"topic":"통합과학2 산과 염기 중화 실험","good":["제산제를 먹으면 왜 속쓰림이 줄어드는지 궁금했다. 수업에서 중화 반응을 배운 뒤 위산과 제산제 사이에도 같은 반응이 일어나는지 확인해 보고 싶었다.","모둠에서 BTB 용액을 넣은 묽은 염산에 제산제 가루를 조금씩 넣으며 색 변화를 관찰했다. 나는 넣은 양과 색을 표로 기록하는 일을 맡았고, 0.5 g씩 여섯 번 넣었을 때 노란색이 초록색으로 바뀌었다.","결과를 그래프로 정리해 발표했다. 초록색이 된 지점을 중화점으로 보고, 제산제 속 탄산수소 나트륨이 염산의 수소 이온과 반응했기 때문이라고 설명했다.","가루가 바닥에 가라앉아 색이 고르게 바뀌지 않은 것이 아쉬웠다. 다음에는 물에 녹여 넣고 젓는 시간을 똑같이 맞추고 싶다. 같은 원리로 산성 토양에 석회를 뿌리는 까닭도 설명할 수 있을 것 같다."],"weak":"산과 염기 실험을 했다. 색이 바뀌는 게 신기했다. 중화 반응에 대해 알게 되었고 친구들과 협동해서 좋았다. 앞으로도 과학 공부를 열심히 하겠다.","why":"무엇이 궁금했는지, 내가 맡은 일, 결과와 근거가 없어요. AI가 빈 곳을 지어내거나, 같은 반 학생 글이 모두 비슷해져요."},"자율":{"topic":"학급 분리배출 바꾸기","good":["우리 반 쓰레기통에 플라스틱과 종이가 자주 섞여 있어서, 환경부장을 맡아 분리배출을 바꿔 보기로 했다.","일주일 동안 점심시간마다 쓰레기통을 살펴 섞인 횟수를 셌고, 분리배출 안내 그림을 만들어 쓰레기통 위에 붙였다. 친구들이 잘 보지 않아 조회 시간에 1분 동안 까닭을 설명했다.","2주 뒤 섞인 횟수가 하루 평균 9번에서 3번으로 줄었다. 학급 회의에서 당번을 정해 계속하기로 했다.","잔소리처럼 들릴까 걱정했지만 까닭을 설명하면 친구들이 따라 준다는 것을 경험했다. 다음 학기에는 다른 반에도 안내 그림을 나누고 싶다."],"weak":"환경부장으로서 분리배출을 열심히 했다. 반이 깨끗해졌다. 책임감을 배웠다.","why":"무엇을 어떻게 했는지, 무엇이 달라졌는지가 없어 '책임감' 같은 말만 남아요."},"동아리":{"topic":"과학탐구 동아리 교실 미세먼지 측정","good":["‘교실 미세먼지는 언제 높을까’를 주제로 정했다. 환기를 해도 공기가 탁하게 느껴져서 궁금했고, 나는 측정과 기록을 맡았다.","간이 측정기로 쉬는 시간, 수업 중, 환기 10분 뒤에 각각 10번씩 쟀다. 친구 두 명은 자료 조사와 발표 자료를 맡았다.","쉬는 시간에 가장 높고 환기 뒤에 낮아진다는 결과를 표와 그래프로 정리해 동아리 발표회에서 발표했다.","측정기가 하나뿐이라 같은 시간에 여러 곳을 재지 못한 것이 아쉬웠다. 다음에는 복도와 교실을 함께 재 보고, 환기 시간을 바꿔 가며 비교하고 싶다."],"weak":"동아리에서 미세먼지를 측정했다. 재미있었고 많이 배웠다. 친구들과 협력했다.","why":"주제를 고른 까닭, 맡은 역할, 결과가 빠져서 동아리 특기사항으로 쓸 장면이 없어요."},"진로":{"topic":"진로 특강 — 기상 예보관","good":["진로 특강에서 기상 예보관의 일을 들었다. 일기예보가 왜 가끔 틀리는지 궁금했다.","특강 뒤 기상청 누리집에서 수치예보 설명을 찾아 읽고, 지구과학 시간에 배운 기단·전선 내용과 이어서 정리했다.","막연히 날씨에 관심이 있었는데, 예보는 관측 자료와 계산을 함께 다루는 일이라는 것을 알고 지구과학과 수학을 같이 공부해야겠다고 생각이 구체적으로 바뀌었다.","2학기 지구시스템과학 시간에 일기도 분석 탐구를 해 보고, 날씨와 기후에 관한 책을 한 권 읽을 계획이다."],"weak":"기상 예보관 특강을 들었다. 멋있는 직업 같다. 나도 꿈을 위해 노력하겠다.","why":"스스로 찾아본 것과 생각이 어떻게 달라졌는지가 없어 '진로 탐색 과정'을 쓸 수 없어요."},"행특":{"topic":"1학기 학교생활","good":["아침 자습 시간에 영어 단어를 하루 20개씩 외웠다. 자주 빼먹어서 달력에 표시하며 이어 갔다.","모둠 활동에서 말을 잘 안 하는 친구에게 맡고 싶은 부분을 먼저 물어보고, 자료 찾는 일을 같이 했다.","처음에는 숙제를 미루는 일이 많았는데, 할 일을 적어 두는 습관을 들인 뒤로 제출을 거의 놓치지 않게 되었다.","다음 학기에는 수학 오답 노트를 일주일에 세 번 쓰는 것이 목표다."],"weak":"학교생활을 성실히 했다. 친구들과 사이좋게 지냈다. 다음 학기에도 열심히 하겠다.","why":"‘성실’, ‘사이좋게’를 보여 줄 장면이 없어요. 행특은 관찰한 장면이 있어야 써져요."}};
+function openEssayGuide(o={}){
+  let cat = ESSAY_QS[o.cat] ? o.cat : "세특";
+  const s = o.s || null;
+  const tabTopic = s ? String((s.cat==="세특" ? (s.subjName||s.name) : s.name)||"") : "";
+  const topicIn = el("input",{type:"text", id:"qsTopic", value:tabTopic, placeholder:"예: "+ESSAY_EX[cat].topic});
+  const body = el("div",{style:"display:flex;flex-direction:column;gap:12px"});
+  const chips = el("div",{class:"chips"});
+  const draw = () => {
+    const q = essayQsOf(cat), ex = ESSAY_EX[cat];
+    if (!s) topicIn.placeholder = "예: "+ex.topic;
+    chips.replaceChildren(...CATS.map(c=>el("button",{class:"chip"+(c.key===cat?" on":""), style:"font-size:.95rem;padding:8px 14px", onclick:()=>{ cat=c.key; draw(); }}, c.label)));
+    body.replaceChildren(
+      el("div",{class:"eg-card"}, el("h4",{text:"좋은 질문 만드는 법"}), el("ul",{style:"margin:0;padding-left:18px"}, ...ESSAY_TIPS.map(t=>el("li",{text:t})))),
+      el("div",{class:"eg-card"}, el("h4",{text:"질문 4개 — "+q.title}),
+        el("ol",{class:"qs-list",style:"margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"}, ...q.qs.map(([t,h])=>el("li",{}, el("b",{text:t}), el("div",{class:"hint",text:h})))),
+        el("ul",{class:"hint",style:"margin:8px 0 0;padding-left:18px"}, ...ESSAY_QS["공통"].map(x=>el("li",{text:x})))),
+      el("div",{class:"eg-grid"},
+        el("div",{class:"eg-card good"}, el("h4",{text:"좋은 답 예시 — "+ex.topic}),
+          el("ol",{style:"margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px"}, ...ex.good.map(t=>el("li",{text:t}))),
+          el("div",{class:"hint",style:"margin-top:6px"},"질문 번호마다 한 단락 · 맡은 일·횟수·결과·아쉬운 점이 다 들어 있어 AI가 지어낼 곳이 없어요.")),
+        el("div",{class:"eg-card weak"}, el("h4",{text:"아쉬운 답 예시"}), el("p",{style:"margin:0",text:ex.weak}),
+          el("div",{style:"margin-top:6px;font-weight:600",text:"왜 아쉬운가요? "+ex.why}))),
+      el("p",{class:"hint",style:"margin:0"},"예시는 지어낸 학생·활동이에요. 학생에게 그대로 보여 주면 베껴 쓸 수 있으니, 보여 줄 때는 다른 활동의 예시를 쓰세요."));
+  };
+  draw();
+  setModalWide(true);
+  showModal(el("h2",{text:"소감문(질문) 작성하기"}),
+    el("p",{class:"hint",style:"margin:0"},"소감문을 이 네 물음으로 받으면 생기부에 쓸 ‘계기 → 한 일 → 정리 → 넓힘’이 소감문에 다 들어 있어서, AI가 빈 곳을 지어낼 일이 줄고 학생마다 다른 글이 나와요. 항목을 고르면 그 항목의 질문과 예시가 나와요."),
+    el("div",{class:"f"}, el("span",{class:"seg-label",text:"생기부 항목"}), chips),
     el("label",{class:"f"},"활동 이름(질문지 맨 위에 적혀요)", topicIn),
-    el("ol",{class:"qs-list",style:"margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"}, ...q.qs.map(([t,h])=>el("li",{}, el("b",{text:t}), el("div",{class:"hint",text:h})))),
-    el("ul",{class:"hint",style:"margin:0;padding-left:18px"}, ...ESSAY_QS["공통"].map(x=>el("li",{text:x}))),
-    el("div",{class:"row",style:"justify-content:flex-end"},
+    body,
+    el("div",{class:"row",style:"justify-content:flex-end;flex-wrap:wrap"},
       el("button",{onclick:closeModal},"닫기"),
       el("button",{id:"qsCopy",onclick:e=>copyText(essayQsText(cat, topicIn.value.trim()), e.currentTarget, "질문을 복사했어요. 리로스쿨·설문 안내 칸에 붙여넣으세요.")},"질문 복사"),
-      el("button",{class:"primary",id:"qsFile",onclick:()=>{ const topic = topicIn.value.trim(); closeModal(); saveQsFile(s, cat, topic); }},"인쇄용 파일로 받기")));
+      el("button",{class:"primary",id:"qsFile",onclick:()=>{ const topic = topicIn.value.trim(); closeModal(); saveQsFile(s || {name:""}, cat, topic); }},"인쇄용 파일로 받기")));
 }
+function openEssayQs(s){ openEssayGuide({cat:s.cat, s}); }
+
 async function saveQsFile(s, cat, topic){
   const T = n => "<"+n+">";   // 문서 껍데기 태그는 나눠 씀(build.py 가 원본 속 껍데기 태그를 막음)
   const doc = T("!DOCTYPE html")+T('html lang="ko"')+T("head")+'<meta charset="utf-8"><title>'+htmlEsc(essayQsOf(cat).title)+'</title><style>'+QS_CSS+'</style>'+T("/head")+T("body")+essayQsHTML(cat, topic)

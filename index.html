@@ -35,6 +35,8 @@ h1{font-family:"Gowun Batang","Batang",serif;font-size:1.7rem;margin:0;letter-sp
 h2{font-size:1rem;margin:0;font-weight:700}
 .sub{color:var(--muted);font-size:.9rem;margin:2px 0 0}
 header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+.top-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;margin-left:auto;align-self:flex-start}
+.top-right .hint{max-width:340px;text-align:right}
 .badge{display:inline-flex;align-items:center;gap:6px;font-size:.82rem;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
 .badge.on{background:var(--accent-soft);color:var(--accent);border-color:transparent}
 .badge .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
@@ -258,7 +260,11 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
       <h1>생기부 자동 생성기</h1>
       <p class="sub">학생 소감문 → 나이스 바이트에 맞춘 특기사항 초안 · 2026 기재요령 반영</p>
     </div>
-    <span id="modeBadge" class="badge"><span class="dot"></span><span id="modeText">AI 연결 확인 중…</span></span>
+    <div class="top-right">
+      <button class="sm" id="getXlsm" title="엑셀(윈도우)에서 쓰는 판(매크로). 받은 파일은 오른쪽 클릭 → 속성 → ‘차단 해제’ 뒤 열고 ‘콘텐츠 사용’을 누르세요.">엑셀판 받기 (.xlsm)</button>
+      <span class="hint" id="xlsmHint" hidden></span>
+      <span id="modeBadge" class="badge"><span class="dot"></span><span id="modeText">AI 연결 확인 중…</span></span>
+    </div>
   </header>
 
   <div class="err" id="noAiBanner" hidden style="margin:0 0 14px;font-size:.92rem"></div>
@@ -341,7 +347,6 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
   <div class="foot">
     <p style="margin:0">작성 내용은 이 브라우저에만 저장됩니다 · 다른 기기로 옮길 때는 <b>엑셀용 전체 복사</b> → 엑셀에 붙여넣어 저장한 뒤, 같은 항목으로 새 탭을 만들어 그 파일을 <b>자료 불러오기</b>로 넣으면 학생·소감문·결과가 옮겨져요(탭 설정·고친 지침은 빼고) · 껐다 켜면 지워지는 학교 PC라면 저장한 파일을 USB·클라우드에 두세요</p>
     <span id="standaloneRow" hidden><button class="sm" id="getStandalone">공유용 HTML 받기 (API 키 입력판)</button> <span class="hint">다른 선생님께 드릴 때 — 받은 분이 API 키를 넣어 써요</span></span>
-    <span id="xlsmRow"><button class="sm" id="getXlsm">엑셀판 받기 (.xlsm)</button> <span class="hint" id="xlsmHint">엑셀(윈도우)에서 쓰는 판 — 받은 파일은 오른쪽 클릭 → 속성 → ‘차단 해제’ 뒤 열고 ‘콘텐츠 사용’</span></span>
     <span class="hint" id="appVer"></span>
   </div>
 </div>
@@ -3536,11 +3541,11 @@ $("#getStandalone").addEventListener("click", async ()=>{
   finally{ b.disabled=false; }
 });
 
-// 엑셀판 받기(2026-11-06 사용자 '웹에서 엑셀버전 다운 받을 수 있는 단추'): 링크판 저장소(ungcheon-tools/saenggibu)에 build.py 가 올려 두는 배포용 엑셀판
+// 엑셀판 받기(2026-11-06 사용자 '웹에서 엑셀버전 다운 받을 수 있는 단추' → '우측 최상단으로 올려': 머리 오른쪽 위, AI 연결 표시 위): 링크판 저장소(ungcheon-tools/saenggibu)에 build.py 가 올려 두는 배포용 엑셀판
 const XLSM_NAME = "생기부_자동_생성기_엑셀판.xlsm", XLSM_URL = "https://ungcheon-tools.github.io/saenggibu/" + encodeURIComponent(XLSM_NAME);
 $("#getXlsm").addEventListener("click", async ()=>{
   const b = $("#getXlsm"), h = $("#xlsmHint");
-  const tell = (msg, cls) => { h.textContent = msg; h.className = "hint" + (cls==="bad" ? " red" : ""); setStatus(msg, cls); };
+  const tell = (msg, cls) => { h.textContent = msg; h.hidden = false; h.className = "hint" + (cls==="bad" ? " red" : ""); setStatus(msg, cls); };
   const after = "받은 파일은 오른쪽 클릭 → 속성 → ‘차단 해제’ 뒤 열고, 위쪽 노란 막대의 ‘콘텐츠 사용’을 누르세요(윈도우용 엑셀).";
   if (downloadsApi){   // Claude 화면 안: 링크 내려받기가 막혀 있어 받아서 저장
     try{
@@ -3548,7 +3553,7 @@ $("#getXlsm").addEventListener("click", async ()=>{
       const r = await fetch(XLSM_URL); if (!r.ok) throw new Error("fetch");
       await downloadsApi.save({filename: XLSM_NAME, data: new Uint8Array(await r.arrayBuffer())});
       tell("엑셀판을 저장했어요. " + after, "good");
-    }catch(e){ if (!(e && e.code==="declined")) tell("이 화면에서는 엑셀판을 받지 못했어요. 인터넷 창에서 https://ungcheon-tools.github.io/saenggibu/ 를 열어 맨 아래 ‘엑셀판 받기’를 누르세요.", "bad"); }
+    }catch(e){ if (!(e && e.code==="declined")) tell("이 화면에서는 엑셀판을 받지 못했어요. 인터넷 창에서 https://ungcheon-tools.github.io/saenggibu/ 를 열어 오른쪽 위 ‘엑셀판 받기’를 누르세요.", "bad"); }
     finally{ b.disabled = false; }
     return;
   }

@@ -1529,7 +1529,11 @@ function renderPanel(){
 
   const list = el("div",{class:"students",style:"margin-top:10px"});
   if (!s.students.length){
-    list.append(el("div",{class:"empty-state"},"아직 학생이 없어요. 소감문 ",el("b",{},"파일·폴더를 이 화면에 끌어다 놓거나, 파일을 복사해 Ctrl+V")," 하면 학번별로 나눠 보여줘요. ",el("b",{},"자료 불러오기"),"나 ",el("b",{},"+ 학생 추가"),"도 돼요. 소감문을 아직 안 받았다면 ",el("b",{},"소감문 질문지"),"로 질문을 나눠 주세요(질문대로 쓴 소감문이면 지어낸 내용 없이 더 정확한 글이 나와요)."));
+    list.append(el("div",{class:"empty-state"},"아직 학생이 없어요. 소감문 ",el("b",{},"파일·폴더를 이 화면에 끌어다 놓거나, 파일을 복사해 Ctrl+V")," 하면 학번별로 나눠 보여줘요. ",el("b",{},"자료 불러오기"),"나 ",el("b",{},"+ 학생 추가"),"도 돼요.",
+      el("div",{class:"row",style:"margin-top:10px;justify-content:center;flex-wrap:wrap;gap:8px"},
+        el("button",{class:"primary-soft",onclick:()=>openImport(s),disabled:!!running},"자료 불러오기"),
+        el("button",{onclick:()=>openEssayQs(s)},"소감문 질문지 (아직 소감문을 안 받았다면)")),
+      el("div",{class:"hint",style:"margin-top:6px"},"질문지대로 쓴 소감문이면 AI가 지어낸 내용 없이 더 정확하고 학생마다 다른 글이 나와요.")));
   }
   s.students.forEach((stu,i)=>list.append(studentCard(s,stu,i)));
   p.append(list);
@@ -3427,10 +3431,12 @@ function openNewTab(after){
   const drawChips=()=>{ chips.replaceChildren(...CATS.map(c=>el("button",{class:"chip"+(c.key===pick?" on":""),onclick:()=>{pick=c.key; touched=true; drawChips(); drawSubj();}},c.label, el("small",{text:" "+(c.max/3)+"자"})))); };
   nameIn.addEventListener("input",()=>{ const g=guess(nameIn.value); if(g && !touched){ pick=g; drawChips(); } drawSubj(); });
   drawChips(); ensureSubjList(); drawSubj();
-  const make=()=>{
+  // withQs: 만든 뒤 바로 그 항목의 소감문 질문지 창(2026-11-06 사용자 '소감문 질문지는 새 탭 만들 때부터 같이')
+  const make=(withQs)=>{
     const name=nameIn.value.trim(); if(!name){ nameIn.focus(); nameIn.placeholder="탭 이름을 적어 주세요"; return; }
     const n=newSubject(name,pick,pick==="세특"?subjIn.value.trim():""); state.subjects.push(n); state.active=n.id; save(); closeModal(); render();
-    if (typeof after==="function") after(n);
+    if (withQs===true) openEssayQs(n);
+    else if (typeof after==="function") after(n);
   };
   nameIn.addEventListener("keydown",e=>{ if(e.key==="Enter") make(); });
   showModal(el("h2",{text:"새 탭 만들기"}),
@@ -3439,7 +3445,10 @@ function openNewTab(after){
     el("div",{class:"f"},el("span",{class:"seg-label",text:"생기부 항목 (분량·작성 관점이 이걸로 정해져요)"}), chips),
     subjBox,
     el("p",{class:"hint",style:"margin:0"},"작성 지침 유형이 항목마다 5가지씩 있어요. 교과세특은 과목의 교과(국어·수학·과학 등 15개 교과군)마다 따로 5가지에, 교과 공통 5가지가 더 있어요. 탭 안에서 고르거나 직접 고칠 수 있어요."),
-    el("div",{class:"row",style:"justify-content:flex-end"}, el("button",{onclick:closeModal},"취소"), el("button",{class:"primary",onclick:make},"만들기")));
+    after ? null : el("p",{class:"hint",style:"margin:0"},"소감문을 아직 안 받았다면 ",el("b",{},"만들고 소감문 질문지"),"를 누르세요. 탭을 만든 뒤 그 항목에 맞는 질문 4개(왜 궁금했나 → 무엇을 했나 → 무엇을 정리했나 → 더 생각한 것)를 복사하거나 인쇄할 수 있어요."),
+    el("div",{class:"row",style:"justify-content:flex-end"}, el("button",{onclick:closeModal},"취소"),
+      after ? null : el("button",{id:"makeWithQs",onclick:()=>make(true),title:"탭을 만들고 바로 소감문 질문지 창을 열어요"},"만들고 소감문 질문지"),
+      el("button",{class:"primary",onclick:()=>make()},"만들기")));
   setTimeout(()=>nameIn.focus(),50);
 }
 

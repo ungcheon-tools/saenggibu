@@ -919,6 +919,19 @@ function thinFill(cat){
     ? "소감문이 짧으니 소감문에 나온 활동마다 이 과목에서 다루는 개념·원리와 이어 무엇을 탐구했는지 풀어 쓰고, 그 활동이 보여 주는 역량·태도를 덧붙여 분량을 채우세요."
     : "소감문이 짧으니 소감문에 나온 활동마다 그 목적과, 활동이 보여 주는 역량·태도·성장을 풀어 써서 분량을 채우세요.";
 }
+// 공개 합격생 세특 분석 줄은 학생 수준 상·중에게만(2026-11-06 사용자 — 사례가 모두 합격생(상위권)이라 하 학생 글을 부풀리지 않게).
+// 하면 GUIDE_CATS.세특 의 '[공개 합격생 세특에서 뽑은 짜임 …]' 머리와 바로 뒤 '- ' 줄들, 교과 지침의 '- 합격생 세특 분석 …' 줄을 뺌. 엑셀 modGen GuideForLevel 과 같은 규칙
+function guideForLevel(text, level){
+  if (level !== "하") return text;
+  const out = []; let skip = false;
+  for (const ln of String(text).split("\n")){
+    if (ln.startsWith("[공개 합격생 세특에서 뽑은 짜임")){ skip = true; continue; }
+    if (skip){ if (ln.startsWith("- ")) continue; skip = false; }
+    if (ln.startsWith("- 합격생 세특 분석")) continue;
+    out.push(ln);
+  }
+  return out.join("\n");
+}
 function genContext(subj, stu){
   const max = catOf(subj.cat).max;
   const base = Math.min(Number(subj.target)||max, max);
@@ -931,9 +944,9 @@ function genContext(subj, stu){
   const key = pkey(subj);
   const usePreset = stu.preset && stu.preset !== subj.preset && presetsOf(key).some(p=>p.name===stu.preset);
   const basePrompt = usePreset ? presetText(key, stu.preset) : (subj.prompt||defaultPrompt(key));
-  const baseText = basePrompt.trim() + "\n\n" + categoryGuide(subj) + "\n\n" + formatRules(paras);
-  const variety = varietyNote();
   const level = levelOf(subj, stu), levelText = levelRule(level);
+  const baseText = basePrompt.trim() + "\n\n" + guideForLevel(categoryGuide(subj), level) + "\n\n" + formatRules(paras);
+  const variety = varietyNote();
   // 소감문이 짧아도(목표의 30% 미만) 분량은 목표(분량 상·중·하)대로 채운다(사용자 10-23) — 대신 소감문 안에서 채우는 방법을 알려 지어내기를 막음
   const thin = neisBytes(stu.essay||"") < target*0.3;
   const lengthRule = "[분량 - 반드시 지킬 것] 공백 포함 약 "+maxC+"자(나이스 "+target+"바이트)를 꽉 채워 쓰세요. 최소 "+minC+"자 이상이어야 합니다. 문장 "+sentences+"~"+(sentences+2)+"개가 알맞습니다. "+(paras===2 ? "첫 문단 약 "+Math.round(maxC*0.55)+"자, 둘째 문단 약 "+(maxC-Math.round(maxC*0.55))+"자로 쓰세요. " : "")+(subj.cat==="행특" ? "분량이 짧으니 대표 장면 한두 개를 깊이 있게 쓰고, 활동을 나열하지 마세요." : "짧게 끝내지 말고, 각 활동마다 과정과 의미를 충분히 풀어 쓰세요.")

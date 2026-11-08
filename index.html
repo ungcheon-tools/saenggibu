@@ -347,7 +347,7 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
           <span class="hint">모델 기본값 claude-sonnet-5-5 · 더 싸게는 claude-haiku-5-5</span></div>
         <div class="g" data-prov="openai"><b>OpenAI <span class="tag paid">유료</span></b>
           <ol><li>AI 회사에서 OpenAI 선택</li><li><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">OpenAI 플랫폼</a> 가입</li><li>결제수단 등록·크레딧 충전</li><li><b style="display:inline">Create new secret key</b>로 키 발급 → 붙여넣기</li></ol>
-          <span class="hint">모델 기본값 gpt-5-mini</span></div>
+          <span class="hint">모델 기본값 gpt-6-luna(가장 쌈) · 더 정교하게는 gpt-6.1-terra</span></div>
       </div>
       <p class="hint" style="margin:10px 0 0">키는 회사마다 따로예요. 회사를 바꾸면 그 회사 키를 넣어 주세요. 키는 비밀번호와 같으니 남과 공유하지 말고, 새어 나갔다면 발급 사이트에서 바로 삭제 후 새로 만드세요. 유료 키는 사이트에서 <b style="display:inline">월 사용 한도(예산)</b>를 걸어두면 안전해요. 어느 AI를 쓰든 같은 지침과 같은 자동 점검·고쳐 쓰기를 거칩니다.</p>
     </details>
@@ -370,7 +370,7 @@ kbd{font-family:inherit;font-size:.8em;border:1px solid var(--line);border-botto
 
 <script>
 "use strict";
-const APP_VERSION = "2026.11.06";
+const APP_VERSION = "2026.11.09";
 // ---------- 기본값 ----------
 const CATS = [
   {key:"세특", label:"교과세특", max:1500},
@@ -776,14 +776,16 @@ const sleep = (ms, signal) => new Promise((res,rej)=>{
 });
 const PROV = {
   gemini:{label:"Gemini", model:"gemini-3.5-flash-lite", link:"https://aistudio.google.com/apikey", linkText:"Google AI Studio에서 무료 키 받기 ↗", ph:"발급받은 API 키를 붙여넣으세요",
-    models:["gemini-3.5-flash-lite","gemini-3.1-flash-lite"]},
+    models:["gemini-3.5-flash-lite","gemini-3.8-flash","gemini-3.1-flash-lite"]},
   claude:{label:"Claude", model:"claude-sonnet-5-5", link:"https://platform.claude.com/settings/keys", linkText:"Claude 개발자 콘솔에서 키 받기 (유료) ↗", ph:"발급받은 API 키를 붙여넣으세요",
     models:["claude-sonnet-5-5","claude-haiku-5-5","claude-opus-5-5"]},
-  openai:{label:"OpenAI", model:"gpt-5-mini", link:"https://platform.openai.com/api-keys", linkText:"OpenAI 플랫폼에서 키 받기 (유료) ↗", ph:"발급받은 API 키를 붙여넣으세요",
-    models:["gpt-5-mini","gpt-5","gpt-5-nano"]}
+  openai:{label:"OpenAI", model:"gpt-6-luna", link:"https://platform.openai.com/api-keys", linkText:"OpenAI 플랫폼에서 키 받기 (유료) ↗", ph:"발급받은 API 키를 붙여넣으세요",
+    models:["gpt-6-luna","gpt-6.1-terra","gpt-6.1-sol"]}
 };
+// 예전 기본 모델을 그대로 쓰던 사람은 한 번만 새 기본으로(2026-11-09 최신화: OpenAI gpt-5-mini → gpt-6-luna, 더 싸고 새것). state.modelMig 로 한 번만 — 그 뒤 직접 고른 모델은 그대로. ★load() 보다 아래에 있어 load 안에서 쓰면 TDZ 오류 — curModel 에서만 씁
+const OLD_DEFAULT_MODELS = {openai:["gpt-5-mini"]};
 function curProv(){ return PROV[state.provider] ? state.provider : "gemini"; }
-function curModel(){ const p=curProv(); state.models = state.models||{}; if(p==="gemini" && state.model && !state.models.gemini) state.models.gemini=state.model; return state.models[p] || PROV[p].model; }
+function curModel(){ const p=curProv(); state.models = state.models||{}; if(p==="gemini" && state.model && !state.models.gemini) state.models.gemini=state.model; if (!state.modelMig){ for (const k in OLD_DEFAULT_MODELS) if (OLD_DEFAULT_MODELS[k].includes(state.models[k])) delete state.models[k]; state.modelMig = 1; } return state.models[p] || PROV[p].model; }
 // opts.images: [{b64, blob}] (JPEG) · opts.json: JSON으로만 답하게 · opts.maxTokens
 function buildRequest(prov, key, model, system, user, opts={}){
   const imgs = opts.images || [];

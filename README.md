@@ -7,3 +7,9 @@
 - API 키·학생 소감문·결과는 접속한 PC의 브라우저에만 저장되고, AI 요청은 그 PC에서 AI 회사(Gemini·Claude·OpenAI)로 바로 갑니다.
 - 원본은 비공개 저장소(saenggibu-generator)에서 만들고 `python build.py` 가 이 폴더의 index.html 을 새로 씁니다. 여기서 직접 고치지 마세요.
 - 엑셀판: `생기부_자동_생성기_엑셀판.xlsm` (앱 화면 오른쪽 위 '엑셀판 받기' 단추가 이 파일을 받아 감. 원본 저장소의 build.py 가 함께 복사)
+
+## 만드는 법·배포법
+
+- 원본 저장소에서 `python build.py` 를 돌리면 이 폴더(로컬 `클로드/saenggibu-web`)의 `index.html` 과 엑셀판이 새로 써진다.
+- 이 폴더에서 `git pull --rebase` → `git add -A` → `git commit -m "..."` → `git push` 하면 GitHub Pages(가지 `main`, 폴더 `/`)가 1~2분 뒤 https://ungcheon-tools.github.io/saenggibu/ 에 반영한다.
+- 이 저장소는 공개다. 학생 자료·API 키·비공개 주소를 넣지 않는다.
